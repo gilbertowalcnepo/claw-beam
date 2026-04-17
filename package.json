@@ -1,0 +1,12 @@
+{
+  "name": "claw-beam",
+  "version": "2026.4.17-alpha",
+  "description": "Prototype secure one-time file transfer tool inspired by wormhole-style flows for OpenClaw-adjacent use.",
+  "type": "module",
+  "bin": {
+    "claw-beam": "./bin/claw-beam.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
