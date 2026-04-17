@@ -3,6 +3,14 @@
 ## Goal
 Create a secure one-time file transfer flow with wormhole-like UX and OpenClaw-friendly naming.
 
+## Current POC state
+The current proof of concept is local-only and bundle-based:
+- sender encrypts a file into a local beam bundle
+- receiver decrypts it with the beam code
+- integrity is checked after decrypt
+
+This validates the CLI shape and encrypted handoff model, but it is not yet a network protocol.
+
 ## Target experience
 1. sender runs `claw-beam send ./artifact.zip`
 2. sender receives a short code such as `7-neon-comet`
@@ -31,16 +39,16 @@ Create a secure one-time file transfer flow with wormhole-like UX and OpenClaw-f
 - transport framing: Noise or libsodium secretstream
 - chunk integrity: authenticated transport frames instead of ad-hoc hashes only
 
-## Non-goals for prototype alpha
+## Non-goals for current POC
 - no production relay
 - no NAT traversal
 - no persistent daemon
-- no live secrets
+- no live mailbox service
 - no final wire protocol commitment
 
-## Prototype alpha deliverable
-A metadata-only envelope that helps validate:
-- CLI naming
-- file packaging shape
-- offer structure
-- future transition points for secure transport
+## Recommended next build order
+1. replace raw code-to-scrypt flow with PAKE-backed session establishment
+2. split metadata channel from encrypted payload channel
+3. add single-use receipt / consumption tracking
+4. add local mailbox service
+5. add blind relay
