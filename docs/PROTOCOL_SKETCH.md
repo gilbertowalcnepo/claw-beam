@@ -60,8 +60,8 @@ That keeps the prototype honest while moving the core cryptography much closer t
 - no distributed consume-proof yet
 
 ## Recommended next build order
-1. move from local reproduced PAKE transcript to exchanged mailbox/rendezvous PAKE messages
-2. split metadata channel from encrypted payload channel over a mailbox-style rendezvous flow
+1. move from the current local mailbox stub to exchanged mailbox/rendezvous PAKE messages over a real transport
+2. split metadata channel from encrypted payload channel over the rendezvous flow
 3. add blind relay
 4. add verifier phrase and session transcript checks
 5. add chunked payload streaming instead of whole-file bundle encryption

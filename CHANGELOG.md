@@ -14,3 +14,4 @@
 - Replaced the synthetic commitment/session-wrap path with a real SPAKE2-backed session establishment.
 - Added verifier-gated PAKE secret recovery for the local bundle model and accepted-session re-wraps derived from verified code material.
 - Added tests for PAKE-backed bundle creation, accept/receive transitions, wrong-code rejection, and CLI flow.
+- Added a local rendezvous mailbox stub with published offer ids, receipt tracking, inspect flow, and CLI offer commands.

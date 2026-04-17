@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const { spake2 } = require("spake2");
 
 const FORMAT_VERSION = "claw-beam.bundle.v3";
+const RENDEZVOUS_VERSION = "claw-beam.rendezvous.v1";
 const CODE_TTL_MS = 15 * 60 * 1000;
 const SESSION_INFO = Buffer.from("claw-beam-session-wrap", "utf-8");
 const PAKE_WRAP_INFO = Buffer.from("claw-beam-pake-wrap", "utf-8");
@@ -255,6 +256,29 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
+function ensureRendezvousDirs(rendezvousDir) {
+  const resolved = path.resolve(rendezvousDir);
+  fs.mkdirSync(path.join(resolved, "offers"), { recursive: true });
+  fs.mkdirSync(path.join(resolved, "receipts"), { recursive: true });
+  return resolved;
+}
+
+function generateOfferId() {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+function getOfferBundlePath(rendezvousDir, offerId) {
+  return path.join(path.resolve(rendezvousDir), "offers", `${offerId}.beam.json`);
+}
+
+function getOfferReceiptPath(rendezvousDir, offerId) {
+  return path.join(path.resolve(rendezvousDir), "receipts", `${offerId}.json`);
+}
+
+export function loadRendezvousReceipt(rendezvousDir, offerId) {
+  return JSON.parse(fs.readFileSync(getOfferReceiptPath(rendezvousDir, offerId), "utf-8"));
+}
+
 async function recoverPakeSharedKey(bundle, code) {
   const verifier = await derivePakeVerifier(code, bundle.session.pake_salt);
   if (verifier.toString("base64") !== bundle.handshake.verifier) {
@@ -308,6 +332,56 @@ export async function acceptBeamBundle(bundlePath, code, options = {}) {
   bundle.handshake.bundle_hash = buildTranscriptHash(bundle);
   saveBundle(bundlePath, bundle);
   return bundle;
+}
+
+export async function publishBeamBundleToRendezvous(bundlePath, rendezvousDir, options = {}) {
+  const { offerId = generateOfferId(), publishedAt = new Date() } = options;
+  const bundle = loadBundle(bundlePath);
+  const resolvedDir = ensureRendezvousDirs(rendezvousDir);
+  const offerPath = getOfferBundlePath(resolvedDir, offerId);
+  const receiptPath = getOfferReceiptPath(resolvedDir, offerId);
+
+  const envelope = {
+    schema: RENDEZVOUS_VERSION,
+    offer_id: offerId,
+    published_at: publishedAt.toISOString(),
+    offer_status: bundle.transfer?.status ?? "awaiting-accept",
+    bundle_path: offerPath,
+    beam_code_hint: bundle.beam_code_hint,
+    file: bundle.file,
+    transfer: bundle.transfer,
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+    },
+  };
+
+  fs.copyFileSync(path.resolve(bundlePath), offerPath);
+  fs.writeFileSync(receiptPath, JSON.stringify(envelope, null, 2) + "\n", "utf-8");
+  return { offerId, offerPath, receiptPath, receipt: envelope };
+}
+
+export function inspectBeamOffer(rendezvousDir, offerId) {
+  const bundle = loadBundle(getOfferBundlePath(rendezvousDir, offerId));
+  const receipt = loadRendezvousReceipt(rendezvousDir, offerId);
+  return { bundle, receipt };
+}
+
+export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}) {
+  const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
+  const offerPath = getOfferBundlePath(rendezvousDir, offerId);
+  const acceptedBundle = await acceptBeamBundle(offerPath, code, { acceptedAt, receiverLabel });
+  const receiptPath = getOfferReceiptPath(rendezvousDir, offerId);
+  const receipt = loadRendezvousReceipt(rendezvousDir, offerId);
+  receipt.offer_status = acceptedBundle.transfer?.status ?? "accepted";
+  receipt.accepted_at = acceptedBundle.transfer?.accepted_at ?? acceptedAt.toISOString();
+  receipt.receiver_label = acceptedBundle.transfer?.receiver_label ?? receiverLabel;
+  receipt.handshake = {
+    status: acceptedBundle.handshake?.status ?? null,
+    transcript_hash: acceptedBundle.handshake?.transcript_hash ?? null,
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", "utf-8");
+  return { bundle: acceptedBundle, receipt };
 }
 
 export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
@@ -366,6 +440,37 @@ export async function receiveBeamBundle(bundlePath, code, outputDir = ".out", op
   }
 
   return { bundle: updatedBundle, outPath };
+}
+
+export async function receiveBeamOffer(rendezvousDir, offerId, code, outputDir = ".out", options = {}) {
+  const { bundle, outPath } = await receiveBeamBundle(getOfferBundlePath(rendezvousDir, offerId), code, outputDir, options);
+  const receiptPath = getOfferReceiptPath(rendezvousDir, offerId);
+  const receipt = loadRendezvousReceipt(rendezvousDir, offerId);
+  receipt.offer_status = bundle.transfer?.status ?? "consumed";
+  receipt.consumed_at = bundle.consumed_at ?? new Date().toISOString();
+  receipt.handshake = {
+    status: bundle.handshake?.status ?? null,
+    transcript_hash: bundle.handshake?.transcript_hash ?? null,
+  };
+  fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", "utf-8");
+  return { bundle, outPath, receipt };
+}
+
+export function renderRendezvousSummary(receipt) {
+  return [
+    `schema: ${receipt.schema}`,
+    `offer_id: ${receipt.offer_id}`,
+    `published_at: ${receipt.published_at}`,
+    `offer_status: ${receipt.offer_status}`,
+    `accepted_at: ${receipt.accepted_at ?? "not-accepted"}`,
+    `receiver_label: ${receipt.receiver_label ?? "not-set"}`,
+    `beam_code_hint: ${receipt.beam_code_hint ?? "not-available"}`,
+    `file: ${receipt.file?.name ?? "unknown"}`,
+    `size_bytes: ${receipt.file?.size_bytes ?? "unknown"}`,
+    `handshake_status: ${receipt.handshake?.status ?? "unknown"}`,
+    `transcript_hash: ${receipt.handshake?.transcript_hash ?? "missing"}`,
+    `bundle_path: ${receipt.bundle_path}`,
+  ].join("\n");
 }
 
 export function renderOfferSummary(bundle) {

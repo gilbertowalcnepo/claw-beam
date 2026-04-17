@@ -11,13 +11,14 @@ It now includes:
 - explicit receiver accept step before receive
 - real SPAKE2-backed session establishment
 - PAKE-derived payload-key wrapping
+- local rendezvous mailbox stub for offer publish, accept, inspect, and receive
 - integrity verification after decrypt
 - bundle consumption tracking
 - optional bundle deletion on receive
-- simple CLI for send, accept, receive, and inspect
+- simple CLI for send, accept, receive, inspect, and rendezvous-backed offer flow
 
 It is still **not** a final wormhole-equivalent secure transport.
-There is no live rendezvous server, no blind relay, and no chunked transfer yet.
+There is no networked rendezvous server yet, no blind relay, and no chunked transfer yet. The current rendezvous path is a local mailbox stub that models the future seam.
 
 ## Current POC behavior
 
@@ -51,6 +52,18 @@ There is no live rendezvous server, no blind relay, and no chunked transfer yet.
   - same as above, but preserves the bundle for inspection
 - `claw-beam inspect <bundle.json>`
   - prints human-readable metadata summary
+- `claw-beam send-rendezvous <file> <rendezvous-dir>`
+  - writes a normal bundle locally
+  - publishes an offer into a local mailbox-style rendezvous directory
+  - returns an offer id plus the beam code
+- `claw-beam accept-offer <rendezvous-dir> <offer-id> <code> [receiver-label]`
+  - accepts an offer directly from the mailbox stub
+  - updates offer receipt state to accepted
+- `claw-beam receive-offer <rendezvous-dir> <offer-id> <code>`
+  - receives directly from the mailbox stub
+  - updates offer receipt state to consumed
+- `claw-beam inspect-offer <rendezvous-dir> <offer-id>`
+  - prints human-readable rendezvous receipt and bundle summary
 
 ## Important security warning
 

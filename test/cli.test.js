@@ -126,6 +126,46 @@ test("CLI receive shows clean error for wrong code", () => {
   assert.doesNotMatch(receiveResult.stderr, /Decipheriv\.final/);
 });
 
+test("CLI send-rendezvous, accept-offer, and receive-offer complete local mailbox flow", () => {
+  const { tempDir, filePath } = makeTempFile();
+  const rendezvousDir = path.join(tempDir, "mailbox");
+
+  const sendResult = spawnSync("node", [cliPath, "send-rendezvous", filePath, rendezvousDir], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(sendResult.status, 0);
+  assert.match(sendResult.stdout, /offer published: [a-f0-9]{16}/);
+  const offerMatch = sendResult.stdout.match(/offer published: ([a-f0-9]{16})/);
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(offerMatch);
+  assert.ok(codeMatch);
+
+  const acceptResult = spawnSync("node", [cliPath, "accept-offer", rendezvousDir, offerMatch[1], codeMatch[1], "per"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(acceptResult.status, 0);
+  assert.match(acceptResult.stdout, /offer_status: accepted/);
+  assert.match(acceptResult.stdout, /receiver_label: per/);
+
+  const inspectResult = spawnSync("node", [cliPath, "inspect-offer", rendezvousDir, offerMatch[1]], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(inspectResult.status, 0);
+  assert.match(inspectResult.stdout, /offer_id: /);
+
+  const receiveResult = spawnSync("node", [cliPath, "receive-offer", rendezvousDir, offerMatch[1], codeMatch[1], "--keep-bundle"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(receiveResult.status, 0);
+  assert.match(receiveResult.stdout, /beam received:/);
+  assert.match(receiveResult.stdout, /offer_status: consumed/);
+  assert.match(receiveResult.stdout, /handshake_status: completed/);
+});
+
 test("CLI accept then receive completes flow", () => {
   const { tempDir, filePath } = makeTempFile();
 

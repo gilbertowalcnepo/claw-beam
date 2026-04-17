@@ -6,9 +6,14 @@ import path from "node:path";
 
 import {
   acceptBeamBundle,
+  acceptBeamOffer,
   createBeamBundle,
+  inspectBeamOffer,
+  publishBeamBundleToRendezvous,
   receiveBeamBundle,
+  receiveBeamOffer,
   renderOfferSummary,
+  renderRendezvousSummary,
   writeBeamBundle,
 } from "../src/claw-beam.js";
 
@@ -206,6 +211,48 @@ test("receiveBeamBundle rejects already-consumed bundle", async () => {
   }));
 });
 
+test("rendezvous publish, accept, inspect, and receive flow works through local mailbox stub", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-rendezvous-"));
+  const sendDir = path.join(tempDir, "send");
+  const recvDir = path.join(tempDir, "recv");
+  const rendezvousDir = path.join(tempDir, "mailbox");
+  fs.mkdirSync(sendDir, { recursive: true });
+  fs.mkdirSync(recvDir, { recursive: true });
+
+  const filePath = path.join(tempDir, "artifact.txt");
+  fs.writeFileSync(filePath, "beam rendezvous payload\n", "utf-8");
+
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T07:00:00.000Z"));
+  const { offerId, receiptPath, receipt } = await publishBeamBundleToRendezvous(bundlePath, rendezvousDir, {
+    publishedAt: new Date("2026-04-17T07:01:00.000Z"),
+  });
+
+  assert.ok(offerId);
+  assert.equal(fs.existsSync(receiptPath), true);
+  assert.equal(receipt.offer_status, "awaiting-accept");
+
+  const accepted = await acceptBeamOffer(rendezvousDir, offerId, beamCode, {
+    acceptedAt: new Date("2026-04-17T07:02:00.000Z"),
+    receiverLabel: "per",
+  });
+  assert.equal(accepted.bundle.transfer.status, "accepted");
+  assert.equal(accepted.receipt.offer_status, "accepted");
+  assert.equal(accepted.receipt.receiver_label, "per");
+
+  const inspected = inspectBeamOffer(rendezvousDir, offerId);
+  assert.equal(inspected.receipt.offer_id, offerId);
+  assert.equal(inspected.bundle.transfer.status, "accepted");
+
+  const received = await receiveBeamOffer(rendezvousDir, offerId, beamCode, recvDir, {
+    deleteBundleOnConsume: false,
+    now: new Date("2026-04-17T07:03:00.000Z"),
+  });
+  assert.equal(fs.readFileSync(received.outPath, "utf-8"), "beam rendezvous payload\n");
+  assert.equal(received.bundle.transfer.status, "consumed");
+  assert.equal(received.receipt.offer_status, "consumed");
+  assert.equal(received.receipt.handshake.status, "completed");
+});
+
 test("renderOfferSummary exposes readable PAKE fields", () => {
   const summary = renderOfferSummary({
     schema: "claw-beam.bundle.v3",
@@ -256,4 +303,32 @@ test("renderOfferSummary exposes readable PAKE fields", () => {
   assert.match(summary, /pake_enabled: true/);
   assert.match(summary, /raw_code_stored_in_bundle: false/);
   assert.match(summary, /algorithm: aes-256-gcm/);
+});
+
+test("renderRendezvousSummary exposes readable offer fields", () => {
+  const summary = renderRendezvousSummary({
+    schema: "claw-beam.rendezvous.v1",
+    offer_id: "abc123",
+    published_at: "2026-04-17T07:01:00.000Z",
+    offer_status: "accepted",
+    accepted_at: "2026-04-17T07:02:00.000Z",
+    receiver_label: "per",
+    beam_code_hint: "7-neon-****",
+    file: {
+      name: "artifact.txt",
+      size_bytes: 42,
+    },
+    handshake: {
+      status: "receiver-accepted",
+      transcript_hash: "abc123",
+    },
+    bundle_path: "/tmp/mailbox/offers/abc123.beam.json",
+  });
+
+  assert.match(summary, /schema: claw-beam.rendezvous.v1/);
+  assert.match(summary, /offer_id: abc123/);
+  assert.match(summary, /offer_status: accepted/);
+  assert.match(summary, /receiver_label: per/);
+  assert.match(summary, /handshake_status: receiver-accepted/);
+  assert.match(summary, /bundle_path: \/tmp\/mailbox\/offers\/abc123.beam.json/);
 });
