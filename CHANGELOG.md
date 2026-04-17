@@ -6,4 +6,5 @@
 - Upgraded the prototype into a bounded local encrypted send/receive POC.
 - Added local bundle encryption, decryption, integrity verification, and inspect flow.
 - Added one-time-like receive semantics with consumption tracking and default bundle removal.
-- Added tests for encrypted round-trip, wrong-code rejection, and consume behavior.
+- Added tests for encrypted round-trip, wrong-code rejection, consume behavior, and CLI error handling.
+- Fixed CLI wrong-code handling to show a clean user-facing error instead of a raw stack trace.

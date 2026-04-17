@@ -29,6 +29,7 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
   - verifies integrity with SHA-256
   - marks the bundle consumed
   - removes the bundle by default after successful receive
+  - returns a clean user-facing error for invalid code or corrupted bundle
 - `claw-beam receive <bundle.json> <code> --keep-bundle`
   - same as above, but preserves the bundle for inspection
 - `claw-beam inspect <bundle.json>`

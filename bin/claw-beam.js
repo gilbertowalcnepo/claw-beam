@@ -21,45 +21,60 @@ if (!command) {
   process.exit(1);
 }
 
-if (command === "send") {
-  if (!arg1) {
-    usage();
-    process.exit(1);
+function run() {
+  if (command === "send") {
+    if (!arg1) {
+      usage();
+      process.exit(1);
+    }
+    const { bundle, bundlePath } = writeBeamBundle(arg1);
+    console.log(`beam bundle written: ${bundlePath}`);
+    console.log(renderOfferSummary(bundle));
+    console.log("share the bundle file and beam code through separate channels for this POC.");
+    return;
   }
-  const { bundle, bundlePath } = writeBeamBundle(arg1);
-  console.log(`beam bundle written: ${bundlePath}`);
-  console.log(renderOfferSummary(bundle));
-  console.log("share the bundle file and beam code through separate channels for this POC.");
-  process.exit(0);
+
+  if (command === "receive") {
+    if (!arg1 || !arg2) {
+      usage();
+      process.exit(1);
+    }
+    const keepBundle = arg3 === "--keep-bundle";
+    const { bundle, outPath } = receiveBeamBundle(arg1, arg2, ".out", {
+      consume: true,
+      deleteBundleOnConsume: !keepBundle,
+    });
+    console.log(`beam received: ${outPath}`);
+    console.log(renderOfferSummary(bundle));
+    if (!keepBundle) {
+      console.log("bundle removed after consume.");
+    }
+    return;
+  }
+
+  if (command === "inspect") {
+    if (!arg1) {
+      usage();
+      process.exit(1);
+    }
+    const payload = JSON.parse(fs.readFileSync(path.resolve(arg1), "utf-8"));
+    console.log(renderOfferSummary(payload));
+    return;
+  }
+
+  usage();
+  process.exit(1);
 }
 
-if (command === "receive") {
-  if (!arg1 || !arg2) {
-    usage();
+try {
+  run();
+  process.exit(0);
+} catch (error) {
+  if (command === "receive") {
+    console.error("Invalid beam code or corrupted bundle.");
     process.exit(1);
   }
-  const keepBundle = arg3 === "--keep-bundle";
-  const { bundle, outPath } = receiveBeamBundle(arg1, arg2, ".out", {
-    consume: true,
-    deleteBundleOnConsume: !keepBundle,
-  });
-  console.log(`beam received: ${outPath}`);
-  console.log(renderOfferSummary(bundle));
-  if (!keepBundle) {
-    console.log("bundle removed after consume.");
-  }
-  process.exit(0);
-}
 
-if (command === "inspect") {
-  if (!arg1) {
-    usage();
-    process.exit(1);
-  }
-  const payload = JSON.parse(fs.readFileSync(path.resolve(arg1), "utf-8"));
-  console.log(renderOfferSummary(payload));
-  process.exit(0);
+  console.error(error?.message || String(error));
+  process.exit(1);
 }
-
-usage();
-process.exit(1);
