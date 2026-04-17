@@ -70,6 +70,8 @@ That keeps the prototype honest while moving the core cryptography much closer t
 ## Current HTTP rendezvous shape
 - `POST /offers` publishes the immutable encrypted offer bundle.
 - `GET /offers/:id` returns the immutable offer bundle hydrated with the current mutable rendezvous state.
+- `GET /offers/:id/handshake` returns explicit handshake transport state and recorded handshake events.
+- `POST /offers/:id/handshake` appends handshake transport events and updates handshake status fields.
 - `POST /offers/:id/accept` updates mutable rendezvous state only, including accepted transfer status, accept nonce, accepted key wrap, and handshake state.
 - `POST /offers/:id/consume` updates mutable rendezvous state only, including consumed status and completion handshake state.
 - The server stores these mutable fields separately from the original published bundle so later message-based rendezvous can replace the state object without redefining the artifact format.

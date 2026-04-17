@@ -12,7 +12,7 @@ It now includes:
 - real SPAKE2-backed session establishment
 - PAKE-derived payload-key wrapping
 - local rendezvous mailbox stub for offer publish, accept, inspect, and receive
-- tiny HTTP rendezvous server for the same offer lifecycle, with immutable published offer bundle plus separate mutable rendezvous state
+- tiny HTTP rendezvous server for the same offer lifecycle, with immutable published offer bundle, separate mutable rendezvous state, and explicit handshake event logging
 - integrity verification after decrypt
 - bundle consumption tracking
 - optional bundle deletion on receive

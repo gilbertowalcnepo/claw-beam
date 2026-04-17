@@ -9,6 +9,7 @@ import {
   acceptBeamOffer,
   acceptBeamOfferHttp,
   createBeamBundle,
+  inspectBeamHandshakeHttp,
   inspectBeamOffer,
   inspectBeamOfferHttp,
   publishBeamBundleToHttpRendezvous,
@@ -301,6 +302,57 @@ test("http rendezvous keeps immutable offer bundle and separate mutable state", 
   const inspected = await inspectBeamOfferHttp(baseUrl, published.offerId);
   assert.equal(inspected.bundle.transfer.status, "accepted");
   assert.equal(inspected.state.transfer.status, "accepted");
+});
+
+test("http rendezvous records explicit handshake events across accept and consume", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-http-events-"));
+  const sendDir = path.join(tempDir, "send");
+  const recvDir = path.join(tempDir, "recv");
+  fs.mkdirSync(sendDir, { recursive: true });
+  fs.mkdirSync(recvDir, { recursive: true });
+
+  const runtime = createRendezvousHttpServer({ storeDir: path.join(tempDir, "store") });
+  t.after(async () => {
+    await runtime.close();
+  });
+  const address = await runtime.listen(0);
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const filePath = path.join(tempDir, "artifact.txt");
+  fs.writeFileSync(filePath, "beam http handshake event payload\n", "utf-8");
+
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T07:20:00.000Z"));
+  const published = await publishBeamBundleToHttpRendezvous(bundlePath, baseUrl, {
+    publishedAt: new Date("2026-04-17T07:21:00.000Z"),
+  });
+
+  let handshakeView = await inspectBeamHandshakeHttp(baseUrl, published.offerId);
+  assert.equal(handshakeView.handshake.events.length, 1);
+  assert.equal(handshakeView.handshake.events[0].event_type, "sender-prepared");
+
+  await acceptBeamOfferHttp(baseUrl, published.offerId, beamCode, {
+    acceptedAt: new Date("2026-04-17T07:22:00.000Z"),
+    receiverLabel: "per",
+  });
+
+  handshakeView = await inspectBeamHandshakeHttp(baseUrl, published.offerId);
+  assert.equal(handshakeView.handshake.status, "receiver-accepted");
+  assert.deepEqual(
+    handshakeView.handshake.events.map((event) => event.event_type),
+    ["sender-prepared", "receiver-accept-started", "receiver-accepted"],
+  );
+
+  await receiveBeamOfferHttp(baseUrl, published.offerId, beamCode, recvDir, {
+    deleteBundleOnConsume: false,
+    now: new Date("2026-04-17T07:23:00.000Z"),
+  });
+
+  handshakeView = await inspectBeamHandshakeHttp(baseUrl, published.offerId);
+  assert.equal(handshakeView.handshake.status, "completed");
+  assert.deepEqual(
+    handshakeView.handshake.events.map((event) => event.event_type),
+    ["sender-prepared", "receiver-accept-started", "receiver-accepted", "receiver-consume-started", "receiver-consumed"],
+  );
 });
 
 test("http rendezvous publish, accept, inspect, and receive flow works through local server", async (t) => {

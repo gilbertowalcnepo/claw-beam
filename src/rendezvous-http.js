@@ -83,6 +83,19 @@ function createInitialState(offerId, bundle) {
       status: bundle.handshake?.status ?? null,
       transcript_hash: bundle.handshake?.transcript_hash ?? null,
       bundle_hash: bundle.handshake?.bundle_hash ?? null,
+      events: [
+        {
+          event_type: "sender-prepared",
+          recorded_at: bundle.created_at ?? new Date().toISOString(),
+          payload: {
+            sender_message: bundle.handshake?.sender_message ?? null,
+            receiver_message: bundle.handshake?.receiver_message ?? null,
+            sender_confirmation: bundle.handshake?.sender_confirmation ?? null,
+            receiver_confirmation: bundle.handshake?.receiver_confirmation ?? null,
+            transcript_hash: bundle.handshake?.transcript_hash ?? null,
+          },
+        },
+      ],
     },
     consumed_at: bundle.consumed_at ?? null,
   };
@@ -111,6 +124,7 @@ function hydrateBundle(bundle, state) {
     handshake: {
       ...(bundle.handshake ?? {}),
       ...(state.handshake ?? {}),
+      events: state.handshake?.events ?? bundle.handshake?.events ?? [],
     },
     consumed_at: state.consumed_at ?? bundle.consumed_at ?? null,
   };
@@ -173,6 +187,48 @@ export function createRendezvousHttpServer(options = {}) {
         const state = loadState(storeDir, offerId);
         const receipt = loadReceipt(storeDir, offerId);
         return sendJson(res, 200, { offer_id: offerId, receipt, bundle: hydrateBundle(bundle, state), state });
+      }
+
+      const handshakeMatch = url.pathname.match(/^\/offers\/([a-f0-9]{16})\/handshake$/);
+      if (handshakeMatch && req.method === "GET") {
+        const offerId = handshakeMatch[1];
+        if (!fs.existsSync(receiptPath(storeDir, offerId))) {
+          return sendJson(res, 404, { error: "offer not found" });
+        }
+        const state = loadState(storeDir, offerId);
+        return sendJson(res, 200, {
+          offer_id: offerId,
+          handshake: state.handshake ?? { status: null, transcript_hash: null, bundle_hash: null, events: [] },
+        });
+      }
+
+      if (handshakeMatch && req.method === "POST") {
+        const offerId = handshakeMatch[1];
+        if (!fs.existsSync(receiptPath(storeDir, offerId))) {
+          return sendJson(res, 404, { error: "offer not found" });
+        }
+        const body = await readJson(req);
+        const state = loadState(storeDir, offerId);
+        state.handshake = {
+          ...(state.handshake ?? {}),
+          ...(body.handshake ?? {}),
+          events: [
+            ...((state.handshake?.events ?? []).filter(Boolean)),
+            {
+              event_type: body.event_type ?? "handshake-update",
+              recorded_at: body.recorded_at ?? new Date().toISOString(),
+              payload: body.payload ?? {},
+            },
+          ],
+        };
+        saveState(storeDir, offerId, state);
+        const receipt = loadReceipt(storeDir, offerId);
+        receipt.handshake = {
+          status: state.handshake?.status ?? receipt.handshake?.status ?? null,
+          transcript_hash: state.handshake?.transcript_hash ?? receipt.handshake?.transcript_hash ?? null,
+        };
+        saveReceipt(storeDir, offerId, receipt);
+        return sendJson(res, 200, { offer_id: offerId, handshake: state.handshake });
       }
 
       const acceptMatch = url.pathname.match(/^\/offers\/([a-f0-9]{16})\/accept$/);

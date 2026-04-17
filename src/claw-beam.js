@@ -442,6 +442,18 @@ export async function inspectBeamOfferHttp(baseUrl, offerId) {
   return { receipt: response.receipt, bundle: response.bundle, state: response.state };
 }
 
+export async function inspectBeamHandshakeHttp(baseUrl, offerId) {
+  return requestJson("GET", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/handshake`);
+}
+
+export async function postBeamHandshakeHttp(baseUrl, offerId, eventType, payload = {}, handshake = {}) {
+  return requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/handshake`, {
+    event_type: eventType,
+    payload,
+    handshake,
+  });
+}
+
 export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}) {
   const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
   const offerPath = getOfferBundlePath(rendezvousDir, offerId);
@@ -462,10 +474,27 @@ export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}
 export async function acceptBeamOfferHttp(baseUrl, offerId, code, options = {}) {
   const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
   const inspected = await inspectBeamOfferHttp(baseUrl, offerId);
+  await postBeamHandshakeHttp(baseUrl, offerId, "receiver-accept-started", {
+    receiver_label: receiverLabel,
+    prior_handshake_status: inspected.bundle.handshake?.status ?? null,
+  }, {
+    status: inspected.bundle.handshake?.status ?? null,
+    transcript_hash: inspected.bundle.handshake?.transcript_hash ?? null,
+    bundle_hash: inspected.bundle.handshake?.bundle_hash ?? null,
+  });
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-claw-beam-http-"));
   const tempBundlePath = path.join(tempDir, `${offerId}.beam.json`);
   fs.writeFileSync(tempBundlePath, JSON.stringify(inspected.bundle, null, 2) + "\n", "utf-8");
   const bundle = await acceptBeamBundle(tempBundlePath, code, { acceptedAt, receiverLabel });
+  await postBeamHandshakeHttp(baseUrl, offerId, "receiver-accepted", {
+    receiver_label: receiverLabel,
+    accept_nonce: bundle.session?.accept_nonce ?? null,
+    key_wrap_stage: bundle.session?.key_wrap_stage ?? null,
+  }, {
+    status: bundle.handshake?.status ?? null,
+    transcript_hash: bundle.handshake?.transcript_hash ?? null,
+    bundle_hash: bundle.handshake?.bundle_hash ?? null,
+  });
   await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/accept`, {
     offer_status: bundle.transfer?.status,
     accepted_at: bundle.transfer?.accepted_at,
@@ -549,10 +578,26 @@ export async function receiveBeamOffer(rendezvousDir, offerId, code, outputDir =
 
 export async function receiveBeamOfferHttp(baseUrl, offerId, code, outputDir = ".out", options = {}) {
   const inspected = await inspectBeamOfferHttp(baseUrl, offerId);
+  await postBeamHandshakeHttp(baseUrl, offerId, "receiver-consume-started", {
+    transfer_status: inspected.bundle.transfer?.status ?? null,
+    handshake_status: inspected.bundle.handshake?.status ?? null,
+  }, {
+    status: inspected.bundle.handshake?.status ?? null,
+    transcript_hash: inspected.bundle.handshake?.transcript_hash ?? null,
+    bundle_hash: inspected.bundle.handshake?.bundle_hash ?? null,
+  });
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-claw-beam-http-"));
   const tempBundlePath = path.join(tempDir, `${offerId}.beam.json`);
   fs.writeFileSync(tempBundlePath, JSON.stringify(inspected.bundle, null, 2) + "\n", "utf-8");
   const { bundle, outPath } = await receiveBeamBundle(tempBundlePath, code, outputDir, options);
+  await postBeamHandshakeHttp(baseUrl, offerId, "receiver-consumed", {
+    consumed_at: bundle.consumed_at ?? null,
+    transfer_status: bundle.transfer?.status ?? null,
+  }, {
+    status: bundle.handshake?.status ?? null,
+    transcript_hash: bundle.handshake?.transcript_hash ?? null,
+    bundle_hash: bundle.handshake?.bundle_hash ?? null,
+  });
   await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/consume`, {
     offer_status: bundle.transfer?.status,
     consumed_at: bundle.consumed_at,
