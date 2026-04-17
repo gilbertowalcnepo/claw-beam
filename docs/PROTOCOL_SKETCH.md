@@ -8,6 +8,7 @@ The current proof of concept is local-only and bundle-based:
 - sender encrypts a file into a local beam bundle
 - receiver decrypts it with the beam code
 - integrity is checked after decrypt
+- bundle is marked consumed and removed by default after receive
 
 This validates the CLI shape and encrypted handoff model, but it is not yet a network protocol.
 
@@ -45,10 +46,11 @@ This validates the CLI shape and encrypted handoff model, but it is not yet a ne
 - no persistent daemon
 - no live mailbox service
 - no final wire protocol commitment
+- no distributed consume-proof yet
 
 ## Recommended next build order
 1. replace raw code-to-scrypt flow with PAKE-backed session establishment
-2. split metadata channel from encrypted payload channel
-3. add single-use receipt / consumption tracking
+2. add explicit sender/receiver roles and acceptance handshake
+3. split metadata channel from encrypted payload channel
 4. add local mailbox service
 5. add blind relay

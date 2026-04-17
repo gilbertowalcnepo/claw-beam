@@ -10,11 +10,11 @@ import {
 function usage() {
   console.error("Usage:");
   console.error("  claw-beam send <file>");
-  console.error("  claw-beam receive <bundle.json> <code>");
+  console.error("  claw-beam receive <bundle.json> <code> [--keep-bundle]");
   console.error("  claw-beam inspect <bundle.json>");
 }
 
-const [, , command, arg1, arg2] = process.argv;
+const [, , command, arg1, arg2, arg3] = process.argv;
 
 if (!command) {
   usage();
@@ -38,9 +38,16 @@ if (command === "receive") {
     usage();
     process.exit(1);
   }
-  const { bundle, outPath } = receiveBeamBundle(arg1, arg2);
+  const keepBundle = arg3 === "--keep-bundle";
+  const { bundle, outPath } = receiveBeamBundle(arg1, arg2, ".out", {
+    consume: true,
+    deleteBundleOnConsume: !keepBundle,
+  });
   console.log(`beam received: ${outPath}`);
   console.log(renderOfferSummary(bundle));
+  if (!keepBundle) {
+    console.log("bundle removed after consume.");
+  }
   process.exit(0);
 }
 

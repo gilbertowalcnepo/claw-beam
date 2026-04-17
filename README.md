@@ -6,10 +6,12 @@ claw-beam is a shared-development prototype for a secure, one-time file transfer
 
 This is a **bounded proof of concept**.
 
-It is more real than the initial metadata-only scaffold:
+It now includes:
 - local encrypted beam bundle creation
 - code-derived decryption for receive flow
 - integrity verification after decrypt
+- bundle consumption tracking
+- optional bundle deletion on receive
 - simple CLI for send, receive, and inspect
 
 It is still **not** a final wormhole-equivalent secure transport.
@@ -25,7 +27,10 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
 - `claw-beam receive <bundle.json> <code>`
   - decrypts the bundle using the beam code
   - verifies integrity with SHA-256
-  - writes the recovered file to `.out/<filename>`
+  - marks the bundle consumed
+  - removes the bundle by default after successful receive
+- `claw-beam receive <bundle.json> <code> --keep-bundle`
+  - same as above, but preserves the bundle for inspection
 - `claw-beam inspect <bundle.json>`
   - prints human-readable metadata summary
 
@@ -37,6 +42,7 @@ What it proves:
 - naming and UX shape
 - local encrypted handoff bundle flow
 - code-derived payload decryption
+- one-time-like consumption behavior in local artifacts
 - future transition path to a real protocol
 
 What it does **not** prove yet:
@@ -44,6 +50,7 @@ What it does **not** prove yet:
 - relay blindness in practice
 - PAKE-backed resistance to code exposure
 - transport/session replay protections
+- distributed one-time enforcement across peers
 - full protocol hardening
 
 Do not use this POC for high-sensitivity production secrets.

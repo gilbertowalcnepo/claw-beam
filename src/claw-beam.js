@@ -54,6 +54,7 @@ export function createBeamBundle(filePath, now = new Date()) {
     schema: FORMAT_VERSION,
     created_at: now.toISOString(),
     expires_at: expiresAt,
+    consumed_at: null,
     beam_code: beamCode,
     file: {
       name: basename,
@@ -84,13 +85,32 @@ export function writeBeamBundle(filePath, outDir = ".out", now = new Date()) {
   return { bundle, bundlePath };
 }
 
-export function receiveBeamBundle(bundlePath, code, outputDir = ".out") {
+function loadBundle(bundlePath) {
+  return JSON.parse(fs.readFileSync(path.resolve(bundlePath), "utf-8"));
+}
+
+function saveBundle(bundlePath, bundle) {
+  fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
+}
+
+export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
+  const bundle = loadBundle(bundlePath);
+  bundle.consumed_at = consumedAt.toISOString();
+  saveBundle(bundlePath, bundle);
+  return bundle;
+}
+
+export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options = {}) {
+  const { consume = true, deleteBundleOnConsume = true, now = new Date() } = options;
   const resolvedBundlePath = path.resolve(bundlePath);
-  const bundle = JSON.parse(fs.readFileSync(resolvedBundlePath, "utf-8"));
+  const bundle = loadBundle(resolvedBundlePath);
   if (bundle.schema !== FORMAT_VERSION) {
     throw new Error(`Unsupported bundle schema: ${bundle.schema}`);
   }
-  if (new Date(bundle.expires_at).getTime() < Date.now()) {
+  if (bundle.consumed_at) {
+    throw new Error("Beam bundle already consumed.");
+  }
+  if (new Date(bundle.expires_at).getTime() < now.getTime()) {
     throw new Error("Beam code expired.");
   }
 
@@ -104,7 +124,16 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out") {
   fs.mkdirSync(resolvedOutDir, { recursive: true });
   const outPath = path.join(resolvedOutDir, bundle.file.name);
   fs.writeFileSync(outPath, plaintext);
-  return { bundle, outPath };
+
+  let updatedBundle = bundle;
+  if (consume) {
+    updatedBundle = markBundleConsumed(resolvedBundlePath, now);
+    if (deleteBundleOnConsume) {
+      fs.unlinkSync(resolvedBundlePath);
+    }
+  }
+
+  return { bundle: updatedBundle, outPath };
 }
 
 export function renderOfferSummary(offer) {
@@ -113,6 +142,7 @@ export function renderOfferSummary(offer) {
     `beam code: ${offer.beam_code}`,
     `created: ${offer.created_at}`,
     `expires: ${offer.expires_at}`,
+    `consumed_at: ${offer.consumed_at ?? "not-consumed"}`,
     `file: ${offer.file.name}`,
     `size_bytes: ${offer.file.size_bytes}`,
     `sha256: ${offer.file.sha256}`,
