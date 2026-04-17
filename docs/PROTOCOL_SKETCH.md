@@ -60,9 +60,16 @@ That keeps the prototype honest while moving the core cryptography much closer t
 - no distributed consume-proof yet
 
 ## Recommended next build order
-1. replace the current whole-bundle HTTP mailbox handoff with exchanged rendezvous PAKE messages over the same transport
+1. replace the current HTTP state-patch handoff with exchanged rendezvous PAKE messages over the same transport
 2. split metadata channel from encrypted payload channel over the rendezvous flow
 3. add blind relay
 4. add verifier phrase and session transcript checks
 5. add chunked payload streaming instead of whole-file bundle encryption
 6. add distributed consume enforcement or replay-resistant session closure
+
+## Current HTTP rendezvous shape
+- `POST /offers` publishes the immutable encrypted offer bundle.
+- `GET /offers/:id` returns the immutable offer bundle hydrated with the current mutable rendezvous state.
+- `POST /offers/:id/accept` updates mutable rendezvous state only, including accepted transfer status, accept nonce, accepted key wrap, and handshake state.
+- `POST /offers/:id/consume` updates mutable rendezvous state only, including consumed status and completion handshake state.
+- The server stores these mutable fields separately from the original published bundle so later message-based rendezvous can replace the state object without redefining the artifact format.

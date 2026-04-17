@@ -258,6 +258,27 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
+function bundleStatePatch(bundle) {
+  return {
+    transfer: {
+      status: bundle.transfer?.status ?? null,
+      accepted_at: bundle.transfer?.accepted_at ?? null,
+      receiver_label: bundle.transfer?.receiver_label ?? null,
+    },
+    session: {
+      accept_nonce: bundle.session?.accept_nonce ?? null,
+      key_wrap_stage: bundle.session?.key_wrap_stage ?? null,
+    },
+    key_wrap: bundle.key_wrap ?? null,
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+      bundle_hash: bundle.handshake?.bundle_hash ?? null,
+    },
+    consumed_at: bundle.consumed_at ?? null,
+  };
+}
+
 function requestJson(method, targetUrl, body) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(targetUrl);
@@ -418,7 +439,7 @@ export async function publishBeamBundleToHttpRendezvous(bundlePath, baseUrl, opt
 
 export async function inspectBeamOfferHttp(baseUrl, offerId) {
   const response = await requestJson("GET", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}`);
-  return { receipt: response.receipt, bundle: response.bundle };
+  return { receipt: response.receipt, bundle: response.bundle, state: response.state };
 }
 
 export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}) {
@@ -449,11 +470,7 @@ export async function acceptBeamOfferHttp(baseUrl, offerId, code, options = {}) 
     offer_status: bundle.transfer?.status,
     accepted_at: bundle.transfer?.accepted_at,
     receiver_label: bundle.transfer?.receiver_label,
-    handshake: {
-      status: bundle.handshake?.status ?? null,
-      transcript_hash: bundle.handshake?.transcript_hash ?? null,
-    },
-    bundle,
+    ...bundleStatePatch(bundle),
   });
   return { bundle, receipt: (await inspectBeamOfferHttp(baseUrl, offerId)).receipt };
 }
@@ -539,11 +556,7 @@ export async function receiveBeamOfferHttp(baseUrl, offerId, code, outputDir = "
   await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/consume`, {
     offer_status: bundle.transfer?.status,
     consumed_at: bundle.consumed_at,
-    handshake: {
-      status: bundle.handshake?.status ?? null,
-      transcript_hash: bundle.handshake?.transcript_hash ?? null,
-    },
-    bundle,
+    ...bundleStatePatch(bundle),
   });
   return { bundle, outPath, receipt: (await inspectBeamOfferHttp(baseUrl, offerId)).receipt };
 }

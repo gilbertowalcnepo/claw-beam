@@ -258,6 +258,51 @@ test("rendezvous publish, accept, inspect, and receive flow works through local 
   assert.equal(received.receipt.handshake.status, "completed");
 });
 
+test("http rendezvous keeps immutable offer bundle and separate mutable state", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-http-state-"));
+  const sendDir = path.join(tempDir, "send");
+  fs.mkdirSync(sendDir, { recursive: true });
+
+  const runtime = createRendezvousHttpServer({ storeDir: path.join(tempDir, "store") });
+  t.after(async () => {
+    await runtime.close();
+  });
+  const address = await runtime.listen(0);
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const filePath = path.join(tempDir, "artifact.txt");
+  fs.writeFileSync(filePath, "beam http immutable offer payload\n", "utf-8");
+
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T07:10:00.000Z"));
+  const published = await publishBeamBundleToHttpRendezvous(bundlePath, baseUrl, {
+    publishedAt: new Date("2026-04-17T07:11:00.000Z"),
+  });
+
+  const offerFile = path.join(tempDir, "store", "offers", `${published.offerId}.beam.json`);
+  const initialStoredOffer = JSON.parse(fs.readFileSync(offerFile, "utf-8"));
+  assert.equal(initialStoredOffer.transfer.status, "awaiting-accept");
+  assert.equal(initialStoredOffer.session.accept_nonce, null);
+
+  await acceptBeamOfferHttp(baseUrl, published.offerId, beamCode, {
+    acceptedAt: new Date("2026-04-17T07:12:00.000Z"),
+    receiverLabel: "per",
+  });
+
+  const storedOfferAfterAccept = JSON.parse(fs.readFileSync(offerFile, "utf-8"));
+  assert.equal(storedOfferAfterAccept.transfer.status, "awaiting-accept");
+  assert.equal(storedOfferAfterAccept.session.accept_nonce, null);
+
+  const stateFile = path.join(tempDir, "store", "states", `${published.offerId}.json`);
+  const storedState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+  assert.equal(storedState.transfer.status, "accepted");
+  assert.equal(storedState.transfer.receiver_label, "per");
+  assert.ok(storedState.session.accept_nonce);
+
+  const inspected = await inspectBeamOfferHttp(baseUrl, published.offerId);
+  assert.equal(inspected.bundle.transfer.status, "accepted");
+  assert.equal(inspected.state.transfer.status, "accepted");
+});
+
 test("http rendezvous publish, accept, inspect, and receive flow works through local server", async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-http-rendezvous-"));
   const sendDir = path.join(tempDir, "send");

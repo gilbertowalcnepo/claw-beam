@@ -5,6 +5,7 @@ import http from "node:http";
 
 const SERVER_SCHEMA = "claw-beam.rendezvous.http.v1";
 const RECEIPT_SCHEMA = "claw-beam.rendezvous.v1";
+const STATE_SCHEMA = "claw-beam.rendezvous.state.v1";
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2) + "\n";
@@ -36,6 +37,7 @@ function ensureStoreDirs(storeDir) {
   const resolved = path.resolve(storeDir);
   fs.mkdirSync(path.join(resolved, "offers"), { recursive: true });
   fs.mkdirSync(path.join(resolved, "receipts"), { recursive: true });
+  fs.mkdirSync(path.join(resolved, "states"), { recursive: true });
   return resolved;
 }
 
@@ -51,12 +53,67 @@ function receiptPath(storeDir, offerId) {
   return path.join(storeDir, "receipts", `${offerId}.json`);
 }
 
+function statePath(storeDir, offerId) {
+  return path.join(storeDir, "states", `${offerId}.json`);
+}
+
 function loadReceipt(storeDir, offerId) {
   return JSON.parse(fs.readFileSync(receiptPath(storeDir, offerId), "utf-8"));
 }
 
 function saveReceipt(storeDir, offerId, receipt) {
   fs.writeFileSync(receiptPath(storeDir, offerId), JSON.stringify(receipt, null, 2) + "\n", "utf-8");
+}
+
+function createInitialState(offerId, bundle) {
+  return {
+    schema: STATE_SCHEMA,
+    offer_id: offerId,
+    transfer: {
+      status: bundle.transfer?.status ?? "awaiting-accept",
+      accepted_at: bundle.transfer?.accepted_at ?? null,
+      receiver_label: bundle.transfer?.receiver_label ?? null,
+    },
+    session: {
+      accept_nonce: bundle.session?.accept_nonce ?? null,
+      key_wrap_stage: bundle.session?.key_wrap_stage ?? null,
+    },
+    key_wrap: bundle.key_wrap,
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+      bundle_hash: bundle.handshake?.bundle_hash ?? null,
+    },
+    consumed_at: bundle.consumed_at ?? null,
+  };
+}
+
+function loadState(storeDir, offerId) {
+  return JSON.parse(fs.readFileSync(statePath(storeDir, offerId), "utf-8"));
+}
+
+function saveState(storeDir, offerId, state) {
+  fs.writeFileSync(statePath(storeDir, offerId), JSON.stringify(state, null, 2) + "\n", "utf-8");
+}
+
+function hydrateBundle(bundle, state) {
+  return {
+    ...bundle,
+    transfer: {
+      ...(bundle.transfer ?? {}),
+      ...(state.transfer ?? {}),
+    },
+    session: {
+      ...(bundle.session ?? {}),
+      ...(state.session ?? {}),
+    },
+    key_wrap: state.key_wrap ?? bundle.key_wrap,
+    handshake: {
+      ...(bundle.handshake ?? {}),
+      ...(state.handshake ?? {}),
+    },
+    consumed_at: state.consumed_at ?? bundle.consumed_at ?? null,
+  };
 }
 
 function buildReceipt({ offerId, bundle, publishedAt, bundlePathname }) {
@@ -95,6 +152,7 @@ export function createRendezvousHttpServer(options = {}) {
         const offerFile = offerPath(storeDir, offerId);
         const publishedAt = body.published_at || new Date().toISOString();
         fs.writeFileSync(offerFile, JSON.stringify(body.bundle, null, 2) + "\n", "utf-8");
+        saveState(storeDir, offerId, createInitialState(offerId, body.bundle));
         const receipt = buildReceipt({
           offerId,
           bundle: body.bundle,
@@ -112,8 +170,9 @@ export function createRendezvousHttpServer(options = {}) {
           return sendJson(res, 404, { error: "offer not found" });
         }
         const bundle = JSON.parse(fs.readFileSync(offerPath(storeDir, offerId), "utf-8"));
+        const state = loadState(storeDir, offerId);
         const receipt = loadReceipt(storeDir, offerId);
-        return sendJson(res, 200, { offer_id: offerId, receipt, bundle });
+        return sendJson(res, 200, { offer_id: offerId, receipt, bundle: hydrateBundle(bundle, state), state });
       }
 
       const acceptMatch = url.pathname.match(/^\/offers\/([a-f0-9]{16})\/accept$/);
@@ -124,15 +183,33 @@ export function createRendezvousHttpServer(options = {}) {
         }
         const body = await readJson(req);
         const receipt = loadReceipt(storeDir, offerId);
-        if (body.bundle) {
-          fs.writeFileSync(offerPath(storeDir, offerId), JSON.stringify(body.bundle, null, 2) + "\n", "utf-8");
-        }
-        receipt.offer_status = body.offer_status ?? receipt.offer_status;
-        receipt.accepted_at = body.accepted_at ?? receipt.accepted_at ?? new Date().toISOString();
-        receipt.receiver_label = body.receiver_label ?? receipt.receiver_label ?? "receiver";
-        receipt.handshake = body.handshake ?? receipt.handshake;
+        const state = loadState(storeDir, offerId);
+        state.transfer = {
+          ...(state.transfer ?? {}),
+          ...(body.transfer ?? {}),
+          status: body.offer_status ?? body.transfer?.status ?? state.transfer?.status ?? "accepted",
+          accepted_at: body.accepted_at ?? body.transfer?.accepted_at ?? state.transfer?.accepted_at ?? new Date().toISOString(),
+          receiver_label: body.receiver_label ?? body.transfer?.receiver_label ?? state.transfer?.receiver_label ?? "receiver",
+        };
+        state.session = {
+          ...(state.session ?? {}),
+          ...(body.session ?? {}),
+        };
+        state.key_wrap = body.key_wrap ?? state.key_wrap;
+        state.handshake = {
+          ...(state.handshake ?? {}),
+          ...(body.handshake ?? {}),
+        };
+        saveState(storeDir, offerId, state);
+        receipt.offer_status = state.transfer?.status ?? receipt.offer_status;
+        receipt.accepted_at = state.transfer?.accepted_at ?? receipt.accepted_at ?? new Date().toISOString();
+        receipt.receiver_label = state.transfer?.receiver_label ?? receipt.receiver_label ?? "receiver";
+        receipt.handshake = {
+          status: state.handshake?.status ?? receipt.handshake?.status ?? null,
+          transcript_hash: state.handshake?.transcript_hash ?? receipt.handshake?.transcript_hash ?? null,
+        };
         saveReceipt(storeDir, offerId, receipt);
-        return sendJson(res, 200, { offer_id: offerId, receipt });
+        return sendJson(res, 200, { offer_id: offerId, receipt, state });
       }
 
       const consumeMatch = url.pathname.match(/^\/offers\/([a-f0-9]{16})\/consume$/);
@@ -143,14 +220,26 @@ export function createRendezvousHttpServer(options = {}) {
         }
         const body = await readJson(req);
         const receipt = loadReceipt(storeDir, offerId);
-        if (body.bundle) {
-          fs.writeFileSync(offerPath(storeDir, offerId), JSON.stringify(body.bundle, null, 2) + "\n", "utf-8");
-        }
-        receipt.offer_status = body.offer_status ?? "consumed";
-        receipt.consumed_at = body.consumed_at ?? new Date().toISOString();
-        receipt.handshake = body.handshake ?? receipt.handshake;
+        const state = loadState(storeDir, offerId);
+        state.transfer = {
+          ...(state.transfer ?? {}),
+          ...(body.transfer ?? {}),
+          status: body.offer_status ?? body.transfer?.status ?? "consumed",
+        };
+        state.handshake = {
+          ...(state.handshake ?? {}),
+          ...(body.handshake ?? {}),
+        };
+        state.consumed_at = body.consumed_at ?? new Date().toISOString();
+        saveState(storeDir, offerId, state);
+        receipt.offer_status = state.transfer?.status ?? "consumed";
+        receipt.consumed_at = state.consumed_at;
+        receipt.handshake = {
+          status: state.handshake?.status ?? receipt.handshake?.status ?? null,
+          transcript_hash: state.handshake?.transcript_hash ?? receipt.handshake?.transcript_hash ?? null,
+        };
         saveReceipt(storeDir, offerId, receipt);
-        return sendJson(res, 200, { offer_id: offerId, receipt });
+        return sendJson(res, 200, { offer_id: offerId, receipt, state });
       }
 
       return sendJson(res, 404, { error: "not found" });

@@ -12,14 +12,14 @@ It now includes:
 - real SPAKE2-backed session establishment
 - PAKE-derived payload-key wrapping
 - local rendezvous mailbox stub for offer publish, accept, inspect, and receive
-- tiny HTTP rendezvous server for the same offer lifecycle
+- tiny HTTP rendezvous server for the same offer lifecycle, with immutable published offer bundle plus separate mutable rendezvous state
 - integrity verification after decrypt
 - bundle consumption tracking
 - optional bundle deletion on receive
 - simple CLI for send, accept, receive, inspect, and both local and HTTP rendezvous-backed offer flow
 
 It is still **not** a final wormhole-equivalent secure transport.
-There is no blind relay and no chunked transfer yet. The current rendezvous path now has two bounded forms: a local mailbox stub and a tiny HTTP mailbox server, both modeling the future seam.
+There is no blind relay and no chunked transfer yet. The current rendezvous path now has two bounded forms: a local mailbox stub and a tiny HTTP mailbox server. The HTTP form now keeps the published offer bundle immutable after publish and records accept/consume mutations in separate rendezvous state, which is a safer seam for later message-based exchange.
 
 ## Current POC behavior
 

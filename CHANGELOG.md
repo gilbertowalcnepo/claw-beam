@@ -16,3 +16,4 @@
 - Added tests for PAKE-backed bundle creation, accept/receive transitions, wrong-code rejection, and CLI flow.
 - Added a local rendezvous mailbox stub with published offer ids, receipt tracking, inspect flow, and CLI offer commands.
 - Added a tiny HTTP rendezvous server plus HTTP publish, inspect, accept, and receive flows validated through tests and CLI.
+- Refined HTTP rendezvous so the published offer bundle remains immutable after publish, while accept and consume update separate mutable rendezvous state.
