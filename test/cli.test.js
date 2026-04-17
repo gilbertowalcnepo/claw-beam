@@ -29,6 +29,8 @@ test("CLI send prints real code but bundle stores only masked hint", () => {
   const bundle = JSON.parse(fs.readFileSync(bundlePath, "utf-8"));
   assert.equal(bundle.schema, "claw-beam.bundle.v2");
   assert.equal(bundle.security.raw_code_stored_in_bundle, false);
+  assert.equal(bundle.handshake.status, "sender-prepared");
+  assert.match(bundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
   assert.match(bundle.beam_code_hint, /^\d{1,2}-[a-z]+-\*\*\*\*$/);
   const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
   assert.ok(codeMatch);
@@ -86,6 +88,7 @@ test("CLI accept requires correct code and then enables receive", () => {
   assert.equal(acceptResult.status, 0);
   assert.match(acceptResult.stdout, /transfer_status: accepted/);
   assert.match(acceptResult.stdout, /key_wrap_stage: accepted-session/);
+  assert.match(acceptResult.stdout, /handshake_status: receiver-accepted/);
 });
 
 test("CLI receive shows clean error for wrong code", () => {
@@ -146,4 +149,5 @@ test("CLI accept then receive completes flow", () => {
   assert.equal(receiveResult.status, 0);
   assert.match(receiveResult.stdout, /beam received:/);
   assert.match(receiveResult.stdout, /transfer_status: consumed/);
+  assert.match(receiveResult.stdout, /handshake_status: completed/);
 });

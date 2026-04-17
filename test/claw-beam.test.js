@@ -30,13 +30,17 @@ test("createBeamBundle builds encrypted prototype metadata for a file without st
   assert.equal(bundle.transfer.status, "awaiting-accept");
   assert.equal(bundle.transfer.accepted_at, null);
   assert.equal(bundle.session.key_wrap_stage, "bootstrap");
+  assert.equal(bundle.handshake.status, "sender-prepared");
+  assert.match(bundle.handshake.sender_commitment, /^[a-f0-9]{64}$/);
+  assert.equal(bundle.handshake.receiver_commitment, null);
+  assert.match(bundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
   assert.equal(bundle.consumed_at, null);
   assert.match(bundle.beam_code_hint, /^\d{1,2}-[a-z]+-\*\*\*\*$/);
   assert.match(beamCode, /^\d{1,2}-[a-z]+-[a-z]+$/);
   assert.equal(JSON.stringify(bundle).includes(beamCode), false);
 });
 
-test("acceptBeamBundle re-wraps payload key into accepted session state", () => {
+test("acceptBeamBundle re-wraps payload key into accepted session state and records handshake receiver evidence", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   fs.mkdirSync(sendDir, { recursive: true });
@@ -46,6 +50,7 @@ test("acceptBeamBundle re-wraps payload key into accepted session state", () => 
 
   const { bundle, bundlePath, beamCode } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
   const originalCiphertext = bundle.key_wrap.ciphertext;
+  const originalTranscriptHash = bundle.handshake.transcript_hash;
   const accepted = acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
@@ -57,6 +62,9 @@ test("acceptBeamBundle re-wraps payload key into accepted session state", () => 
   assert.equal(accepted.session.key_wrap_stage, "accepted-session");
   assert.ok(accepted.session.accept_nonce);
   assert.notEqual(accepted.key_wrap.ciphertext, originalCiphertext);
+  assert.equal(accepted.handshake.status, "receiver-accepted");
+  assert.match(accepted.handshake.receiver_commitment, /^[a-f0-9]{64}$/);
+  assert.notEqual(accepted.handshake.transcript_hash, originalTranscriptHash);
 });
 
 test("acceptBeamBundle rejects wrong code", () => {
@@ -121,6 +129,8 @@ test("accepted bundle can complete encrypted round-trip through session-wrapped 
   assert.equal(updatedBundle.transfer.status, "consumed");
   assert.equal(updatedBundle.transfer.receiver_label, "per");
   assert.equal(updatedBundle.session.key_wrap_stage, "accepted-session");
+  assert.equal(updatedBundle.handshake.status, "completed");
+  assert.match(updatedBundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
   assert.equal(updatedBundle.consumed_at, "2026-04-17T06:55:00.000Z");
 });
 
@@ -205,6 +215,10 @@ test("renderOfferSummary exposes readable fields", () => {
     session: {
       key_wrap_stage: "accepted-session",
     },
+    handshake: {
+      status: "receiver-accepted",
+      transcript_hash: "abc123",
+    },
     consumed_at: null,
     file: {
       name: "artifact.txt",
@@ -227,6 +241,8 @@ test("renderOfferSummary exposes readable fields", () => {
   assert.match(summary, /accepted_at: 2026-04-17T06:52:00.000Z/);
   assert.match(summary, /receiver_label: per/);
   assert.match(summary, /key_wrap_stage: accepted-session/);
+  assert.match(summary, /handshake_status: receiver-accepted/);
+  assert.match(summary, /transcript_hash: abc123/);
   assert.match(summary, /consumed_at: not-consumed/);
   assert.match(summary, /encrypted_payload: true/);
   assert.match(summary, /raw_code_stored_in_bundle: false/);

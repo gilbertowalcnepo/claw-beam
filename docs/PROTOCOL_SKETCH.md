@@ -7,13 +7,25 @@ Create a secure one-time file transfer flow with wormhole-like UX and OpenClaw-f
 The current proof of concept is local-only and bundle-based:
 - sender encrypts payload with a random payload key
 - sender wraps that payload key with a code-derived bootstrap key
+- sender records a sender-side handshake commitment
 - receiver explicitly accepts the bundle with the code
 - acceptance re-wraps the payload key into an accepted-session key
+- acceptance records a receiver-side handshake commitment and updates transcript state
 - receiver decrypts the payload using the accepted-session wrap
 - integrity is checked after decrypt
 - bundle is marked consumed and removed by default after receive
 
 This validates the CLI shape and a more realistic transfer-state model, but it is not yet a network protocol.
+
+## Why this handshake seam matters
+This prototype now has an explicit place to insert real PAKE messages later.
+Instead of hiding session state inside arbitrary bundle fields, the model now has:
+- sender-prepared handshake state
+- receiver-accepted handshake state
+- transcript hash updates across steps
+- an explicit distinction between transfer state and handshake state
+
+That means a later PAKE integration can replace the current commitments and code-derived wrapping without rewriting the whole UX model.
 
 ## Target experience
 1. sender runs `claw-beam send ./artifact.zip`
@@ -53,7 +65,8 @@ This validates the CLI shape and a more realistic transfer-state model, but it i
 
 ## Recommended next build order
 1. replace current code-derived bootstrap/session wrap with PAKE-backed session establishment
-2. split metadata channel from encrypted payload channel over a mailbox-style rendezvous flow
-3. add blind relay
-4. add verifier phrase and session transcript checks
-5. add chunked payload streaming instead of whole-file bundle encryption
+2. replace current synthetic commitments with real PAKE transcript messages
+3. split metadata channel from encrypted payload channel over a mailbox-style rendezvous flow
+4. add blind relay
+5. add verifier phrase and session transcript checks
+6. add chunked payload streaming instead of whole-file bundle encryption

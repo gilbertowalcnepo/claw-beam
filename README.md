@@ -10,6 +10,7 @@ It now includes:
 - local encrypted beam bundle creation
 - explicit receiver accept step before receive
 - session-wrapped payload key flow
+- explicit handshake metadata and transcript state
 - code-derived bootstrap and accepted-session key wrapping
 - integrity verification after decrypt
 - bundle consumption tracking
@@ -27,6 +28,7 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
   - creates a random payload key
   - encrypts the payload with that payload key
   - wraps the payload key with a code-derived bootstrap key
+  - writes sender-side handshake metadata and transcript state into the bundle
   - writes the bundle to `.out/<filename>.beam.json`
   - prints the beam code to the sender, but stores only a masked code hint in the bundle
   - leaves transfer state at `awaiting-accept`
@@ -34,13 +36,15 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
   - verifies the code can unwrap the bootstrap-wrapped payload key
   - re-wraps the payload key into an accepted-session key using sender nonce + accept nonce
   - records explicit receiver acceptance
+  - records receiver-side handshake commitment and updates the transcript hash
   - moves transfer state to `accepted`
 - `claw-beam receive <bundle.json> <code>`
   - requires the bundle to have been accepted first
+  - requires handshake state to be complete enough for receive
   - derives the accepted-session unwrap key from the code and session nonces
   - decrypts the payload using the recovered payload key
   - verifies integrity with SHA-256
-  - marks the bundle consumed
+  - marks the bundle consumed and sets handshake state to completed
   - removes the bundle by default after successful receive
 - `claw-beam receive <bundle.json> <code> --keep-bundle`
   - same as above, but preserves the bundle for inspection
@@ -55,6 +59,7 @@ What it proves:
 - naming and UX shape
 - local encrypted handoff bundle flow
 - explicit sender/receiver acceptance state
+- explicit handshake/transcript seam for future PAKE integration
 - payload encryption separated from the raw beam code
 - bundle no longer stores the raw beam code
 - one-time-like consumption behavior in local artifacts

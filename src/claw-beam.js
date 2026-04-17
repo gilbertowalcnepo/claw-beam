@@ -5,6 +5,7 @@ import path from "node:path";
 const FORMAT_VERSION = "claw-beam.bundle.v2";
 const CODE_TTL_MS = 15 * 60 * 1000;
 const SESSION_INFO = Buffer.from("claw-beam-session-wrap", "utf-8");
+const HANDSHAKE_INFO = Buffer.from("claw-beam-handshake", "utf-8");
 
 export function generateBeamCode() {
   const left = crypto.randomInt(1, 100);
@@ -37,6 +38,39 @@ export function deriveSessionWrapKey(code, senderNonce, acceptNonce) {
       32,
     ),
   );
+}
+
+function hashObject(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function buildSenderCommitment(code, senderNonce) {
+  const bootstrapKey = deriveBootstrapKey(code, senderNonce);
+  return crypto.createHash("sha256").update(HANDSHAKE_INFO).update(bootstrapKey).digest("hex");
+}
+
+function buildReceiverCommitment(code, senderNonce, acceptNonce) {
+  const sessionKey = deriveSessionWrapKey(code, senderNonce, acceptNonce);
+  return crypto.createHash("sha256").update(HANDSHAKE_INFO).update(Buffer.from("receiver", "utf-8")).update(sessionKey).digest("hex");
+}
+
+function buildTranscriptHash(bundle) {
+  return hashObject({
+    schema: bundle.schema,
+    beam_code_hint: bundle.beam_code_hint,
+    transfer: bundle.transfer,
+    session: {
+      sender_nonce: bundle.session?.sender_nonce ?? null,
+      accept_nonce: bundle.session?.accept_nonce ?? null,
+      key_wrap_stage: bundle.session?.key_wrap_stage ?? null,
+    },
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      sender_commitment: bundle.handshake?.sender_commitment ?? null,
+      receiver_commitment: bundle.handshake?.receiver_commitment ?? null,
+    },
+    file: bundle.file,
+  });
 }
 
 export function encryptBufferWithKey(buffer, key) {
@@ -95,6 +129,12 @@ export function createBeamBundle(filePath, now = new Date()) {
       accept_nonce: null,
       key_wrap_stage: "bootstrap",
     },
+    handshake: {
+      status: "sender-prepared",
+      sender_commitment: buildSenderCommitment(beamCode, senderNonce),
+      receiver_commitment: null,
+      transcript_hash: null,
+    },
     consumed_at: null,
     file: {
       name: basename,
@@ -110,6 +150,8 @@ export function createBeamBundle(filePath, now = new Date()) {
       notes: "Local encrypted POC. Bundle stores only a masked code hint and session-wrapped payload key.",
     },
   };
+
+  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
 
   return { bundle, beamCode };
 }
@@ -168,6 +210,10 @@ export function acceptBeamBundle(bundlePath, code, options = {}) {
   bundle.session = bundle.session ?? {};
   bundle.session.accept_nonce = acceptNonce;
   bundle.session.key_wrap_stage = "accepted-session";
+  bundle.handshake = bundle.handshake ?? {};
+  bundle.handshake.status = "receiver-accepted";
+  bundle.handshake.receiver_commitment = buildReceiverCommitment(code, bundle.session.sender_nonce, acceptNonce);
+  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
   saveBundle(bundlePath, bundle);
   return bundle;
 }
@@ -177,6 +223,9 @@ export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
   bundle.consumed_at = consumedAt.toISOString();
   bundle.transfer = bundle.transfer ?? {};
   bundle.transfer.status = "consumed";
+  bundle.handshake = bundle.handshake ?? {};
+  bundle.handshake.status = "completed";
+  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
   saveBundle(bundlePath, bundle);
   return bundle;
 }
@@ -199,6 +248,9 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options 
   }
   if (!bundle.session || bundle.session.key_wrap_stage !== "accepted-session" || !bundle.session.accept_nonce) {
     throw new Error("Beam session is incomplete.");
+  }
+  if (!bundle.handshake || bundle.handshake.status !== "receiver-accepted" || !bundle.handshake.receiver_commitment) {
+    throw new Error("Beam handshake is incomplete.");
   }
 
   const payloadKey = unwrapPayloadKeyFromAcceptedSession(bundle, code);
@@ -234,6 +286,8 @@ export function renderOfferSummary(bundle) {
     `accepted_at: ${bundle.transfer?.accepted_at ?? "not-accepted"}`,
     `receiver_label: ${bundle.transfer?.receiver_label ?? "not-set"}`,
     `key_wrap_stage: ${bundle.session?.key_wrap_stage ?? "unknown"}`,
+    `handshake_status: ${bundle.handshake?.status ?? "unknown"}`,
+    `transcript_hash: ${bundle.handshake?.transcript_hash ?? "missing"}`,
     `consumed_at: ${bundle.consumed_at ?? "not-consumed"}`,
     `file: ${bundle.file.name}`,
     `size_bytes: ${bundle.file.size_bytes}`,
