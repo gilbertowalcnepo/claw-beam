@@ -9,16 +9,15 @@ This is a **bounded proof of concept**.
 It now includes:
 - local encrypted beam bundle creation
 - explicit receiver accept step before receive
-- session-wrapped payload key flow
-- explicit handshake metadata and transcript state
-- code-derived bootstrap and accepted-session key wrapping
+- real SPAKE2-backed session establishment
+- PAKE-derived payload-key wrapping
 - integrity verification after decrypt
 - bundle consumption tracking
 - optional bundle deletion on receive
 - simple CLI for send, accept, receive, and inspect
 
 It is still **not** a final wormhole-equivalent secure transport.
-There is no live rendezvous server, no blind relay, and no PAKE yet.
+There is no live rendezvous server, no blind relay, and no chunked transfer yet.
 
 ## Current POC behavior
 
@@ -26,22 +25,24 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
   - reads a local file
   - generates a one-time beam code
   - creates a random payload key
-  - encrypts the payload with that payload key
-  - wraps the payload key with a code-derived bootstrap key
-  - writes sender-side handshake metadata and transcript state into the bundle
+  - runs a bounded local SPAKE2 exchange derived from the code
+  - encrypts the payload with the payload key
+  - wraps the payload key with a PAKE-derived wrap key
+  - stores a verifier-gated recovery wrap plus PAKE transcript artifacts in the bundle
   - writes the bundle to `.out/<filename>.beam.json`
   - prints the beam code to the sender, but stores only a masked code hint in the bundle
   - leaves transfer state at `awaiting-accept`
 - `claw-beam accept <bundle.json> <code> [receiver-label]`
-  - verifies the code can unwrap the bootstrap-wrapped payload key
-  - re-wraps the payload key into an accepted-session key using sender nonce + accept nonce
+  - derives the PAKE verifier from the code and verifies it against bundle state
+  - recovers the stored PAKE shared secret through a verifier-gated wrap
+  - unwraps the payload key from the PAKE bootstrap wrap
+  - re-wraps the payload key into an accepted-session key using verifier-derived session material + accept nonce
   - records explicit receiver acceptance
-  - records receiver-side handshake commitment and updates the transcript hash
   - moves transfer state to `accepted`
 - `claw-beam receive <bundle.json> <code>`
   - requires the bundle to have been accepted first
-  - requires handshake state to be complete enough for receive
-  - derives the accepted-session unwrap key from the code and session nonces
+  - derives the PAKE verifier from the code and verifies it against bundle state
+  - derives the accepted-session unwrap key from verifier-derived session material and accept nonce
   - decrypts the payload using the recovered payload key
   - verifies integrity with SHA-256
   - marks the bundle consumed and sets handshake state to completed
@@ -58,8 +59,7 @@ This is still a **prototype**.
 What it proves:
 - naming and UX shape
 - local encrypted handoff bundle flow
-- explicit sender/receiver acceptance state
-- explicit handshake/transcript seam for future PAKE integration
+- real SPAKE2-backed session establishment in the prototype
 - payload encryption separated from the raw beam code
 - bundle no longer stores the raw beam code
 - one-time-like consumption behavior in local artifacts
@@ -68,8 +68,8 @@ What it proves:
 What it does **not** prove yet:
 - online rendezvous security
 - relay blindness in practice
-- PAKE-backed resistance to code exposure
-- transport/session replay protections
+- audited PAKE implementation suitability for production use
+- transport/session replay protections across distributed peers
 - distributed one-time enforcement across peers
 - full protocol hardening
 

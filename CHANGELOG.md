@@ -9,6 +9,8 @@
 - Added CLI error handling so wrong codes return a clean user-facing message.
 - Added explicit accept step and transfer-state tracking (`awaiting-accept` -> `accepted` -> `consumed`).
 - Reworked the bundle flow so the raw beam code is no longer stored in the bundle.
-- Added session-wrapped payload-key flow: bootstrap key wrap at send, accepted-session re-wrap at accept, accepted-session unwrap at receive.
-- Added explicit handshake metadata and transcript state so PAKE can replace the current synthetic commitments later without reshaping the whole flow.
-- Added tests for masked code hints, accept-time code verification, session wrap transitions, handshake status transitions, transcript updates, and CLI flow.
+- Added session-wrapped payload-key flow.
+- Added handshake metadata and transcript seam.
+- Replaced the synthetic commitment/session-wrap path with a real SPAKE2-backed session establishment.
+- Added verifier-gated PAKE secret recovery for the local bundle model and accepted-session re-wraps derived from verified code material.
+- Added tests for PAKE-backed bundle creation, accept/receive transitions, wrong-code rejection, and CLI flow.

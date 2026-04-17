@@ -23,13 +23,13 @@ if (!command) {
   process.exit(1);
 }
 
-function run() {
+async function run() {
   if (command === "send") {
     if (!arg1) {
       usage();
       process.exit(1);
     }
-    const { bundle, bundlePath, beamCode } = writeBeamBundle(arg1);
+    const { bundle, bundlePath, beamCode } = await writeBeamBundle(arg1);
     console.log(`beam bundle written: ${bundlePath}`);
     console.log(renderOfferSummary(bundle));
     console.log(`beam code: ${beamCode}`);
@@ -44,7 +44,7 @@ function run() {
       process.exit(1);
     }
     const receiverLabel = arg3 || "receiver";
-    const bundle = acceptBeamBundle(arg1, arg2, { receiverLabel });
+    const bundle = await acceptBeamBundle(arg1, arg2, { receiverLabel });
     console.log(`beam accepted: ${path.resolve(arg1)}`);
     console.log(renderOfferSummary(bundle));
     return;
@@ -56,7 +56,7 @@ function run() {
       process.exit(1);
     }
     const keepBundle = arg3 === "--keep-bundle";
-    const { bundle, outPath } = receiveBeamBundle(arg1, arg2, ".out", {
+    const { bundle, outPath } = await receiveBeamBundle(arg1, arg2, ".out", {
       consume: true,
       deleteBundleOnConsume: !keepBundle,
     });
@@ -83,7 +83,7 @@ function run() {
 }
 
 try {
-  run();
+  await run();
   process.exit(0);
 } catch (error) {
   if (command === "receive") {
@@ -91,7 +91,9 @@ try {
       ? "Beam bundle must be accepted before receive."
       : error?.message === "Beam session is incomplete."
         ? "Beam session is incomplete."
-        : "Invalid beam code or corrupted bundle.");
+        : error?.message === "Beam handshake is incomplete."
+          ? "Beam handshake is incomplete."
+          : "Invalid beam code or corrupted bundle.");
     process.exit(1);
   }
 

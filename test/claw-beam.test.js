@@ -12,35 +12,42 @@ import {
   writeBeamBundle,
 } from "../src/claw-beam.js";
 
-test("createBeamBundle builds encrypted prototype metadata for a file without storing raw code", () => {
+test("createBeamBundle builds encrypted prototype metadata for a file without storing raw code and with PAKE verifier/transcript artifacts", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "hello beam\n", "utf-8");
 
-  const { bundle, beamCode } = createBeamBundle(filePath, new Date("2026-04-17T06:50:00.000Z"));
+  const { bundle, beamCode } = await createBeamBundle(filePath, new Date("2026-04-17T06:50:00.000Z"));
 
-  assert.equal(bundle.schema, "claw-beam.bundle.v2");
+  assert.equal(bundle.schema, "claw-beam.bundle.v3");
   assert.equal(bundle.file.name, "artifact.txt");
   assert.equal(bundle.file.size_bytes, Buffer.byteLength("hello beam\n"));
   assert.equal(bundle.security.prototype_only, true);
   assert.equal(bundle.security.encrypted_payload, true);
   assert.equal(bundle.security.raw_code_stored_in_bundle, false);
+  assert.equal(bundle.security.pake_enabled, true);
   assert.equal(bundle.payload.algorithm, "aes-256-gcm");
   assert.equal(bundle.key_wrap.algorithm, "aes-256-gcm");
   assert.equal(bundle.transfer.status, "awaiting-accept");
   assert.equal(bundle.transfer.accepted_at, null);
-  assert.equal(bundle.session.key_wrap_stage, "bootstrap");
+  assert.equal(bundle.session.key_wrap_stage, "pake-bootstrap");
+  assert.equal(bundle.session.pake_suite, "ED25519-SHA256-HKDF-HMAC-SCRYPT");
+  assert.ok(bundle.session.pake_salt);
   assert.equal(bundle.handshake.status, "sender-prepared");
-  assert.match(bundle.handshake.sender_commitment, /^[a-f0-9]{64}$/);
-  assert.equal(bundle.handshake.receiver_commitment, null);
   assert.match(bundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
+  assert.ok(bundle.handshake.verifier);
+  assert.ok(bundle.handshake.sender_message);
+  assert.ok(bundle.handshake.receiver_message);
+  assert.ok(bundle.handshake.sender_confirmation);
+  assert.ok(bundle.handshake.receiver_confirmation);
+  assert.ok(bundle.pake_shared_secret_wrap);
   assert.equal(bundle.consumed_at, null);
   assert.match(bundle.beam_code_hint, /^\d{1,2}-[a-z]+-\*\*\*\*$/);
   assert.match(beamCode, /^\d{1,2}-[a-z]+-[a-z]+$/);
   assert.equal(JSON.stringify(bundle).includes(beamCode), false);
 });
 
-test("acceptBeamBundle re-wraps payload key into accepted session state and records handshake receiver evidence", () => {
+test("acceptBeamBundle re-wraps payload key into PAKE accepted session state via verifier-gated recovery", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   fs.mkdirSync(sendDir, { recursive: true });
@@ -48,10 +55,9 @@ test("acceptBeamBundle re-wraps payload key into accepted session state and reco
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { bundle, bundlePath, beamCode } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  const { bundle, bundlePath, beamCode } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
   const originalCiphertext = bundle.key_wrap.ciphertext;
-  const originalTranscriptHash = bundle.handshake.transcript_hash;
-  const accepted = acceptBeamBundle(bundlePath, beamCode, {
+  const accepted = await acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   });
@@ -59,15 +65,14 @@ test("acceptBeamBundle re-wraps payload key into accepted session state and reco
   assert.equal(accepted.transfer.status, "accepted");
   assert.equal(accepted.transfer.accepted_at, "2026-04-17T06:52:00.000Z");
   assert.equal(accepted.transfer.receiver_label, "per");
-  assert.equal(accepted.session.key_wrap_stage, "accepted-session");
+  assert.equal(accepted.session.key_wrap_stage, "pake-accepted-session");
   assert.ok(accepted.session.accept_nonce);
   assert.notEqual(accepted.key_wrap.ciphertext, originalCiphertext);
   assert.equal(accepted.handshake.status, "receiver-accepted");
-  assert.match(accepted.handshake.receiver_commitment, /^[a-f0-9]{64}$/);
-  assert.notEqual(accepted.handshake.transcript_hash, originalTranscriptHash);
+  assert.match(accepted.handshake.transcript_hash, /^[a-f0-9]{64}$/);
 });
 
-test("acceptBeamBundle rejects wrong code", () => {
+test("acceptBeamBundle rejects wrong code", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   fs.mkdirSync(sendDir, { recursive: true });
@@ -75,15 +80,15 @@ test("acceptBeamBundle rejects wrong code", () => {
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  const { bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
 
-  assert.throws(() => acceptBeamBundle(bundlePath, "9-wrong-code", {
+  await assert.rejects(() => acceptBeamBundle(bundlePath, "9-wrong-code", {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   }));
 });
 
-test("receiveBeamBundle requires acceptance before receive", () => {
+test("receiveBeamBundle requires acceptance before receive", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   const recvDir = path.join(tempDir, "recv");
@@ -93,15 +98,15 @@ test("receiveBeamBundle requires acceptance before receive", () => {
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { beamCode, bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
 
-  assert.throws(() => receiveBeamBundle(bundlePath, beamCode, recvDir, {
+  await assert.rejects(() => receiveBeamBundle(bundlePath, beamCode, recvDir, {
     deleteBundleOnConsume: false,
     now: new Date("2026-04-17T06:55:00.000Z"),
   }));
 });
 
-test("accepted bundle can complete encrypted round-trip through session-wrapped payload key", () => {
+test("accepted bundle can complete encrypted round-trip through PAKE-backed session-wrapped payload key", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   const recvDir = path.join(tempDir, "recv");
@@ -111,13 +116,13 @@ test("accepted bundle can complete encrypted round-trip through session-wrapped 
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { beamCode, bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
-  acceptBeamBundle(bundlePath, beamCode, {
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  await acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   });
 
-  const result = receiveBeamBundle(bundlePath, beamCode, recvDir, {
+  const result = await receiveBeamBundle(bundlePath, beamCode, recvDir, {
     deleteBundleOnConsume: false,
     now: new Date("2026-04-17T06:55:00.000Z"),
   });
@@ -128,13 +133,13 @@ test("accepted bundle can complete encrypted round-trip through session-wrapped 
   assert.equal(path.basename(result.outPath), "artifact.txt");
   assert.equal(updatedBundle.transfer.status, "consumed");
   assert.equal(updatedBundle.transfer.receiver_label, "per");
-  assert.equal(updatedBundle.session.key_wrap_stage, "accepted-session");
+  assert.equal(updatedBundle.session.key_wrap_stage, "pake-accepted-session");
   assert.equal(updatedBundle.handshake.status, "completed");
   assert.match(updatedBundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
   assert.equal(updatedBundle.consumed_at, "2026-04-17T06:55:00.000Z");
 });
 
-test("receiveBeamBundle rejects wrong code", () => {
+test("receiveBeamBundle rejects wrong code", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   fs.mkdirSync(sendDir, { recursive: true });
@@ -142,18 +147,18 @@ test("receiveBeamBundle rejects wrong code", () => {
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { beamCode, bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
-  acceptBeamBundle(bundlePath, beamCode, {
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  await acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   });
 
-  assert.throws(() => receiveBeamBundle(bundlePath, "9-wrong-code", tempDir, {
+  await assert.rejects(() => receiveBeamBundle(bundlePath, "9-wrong-code", tempDir, {
     deleteBundleOnConsume: false,
   }));
 });
 
-test("receiveBeamBundle removes bundle by default after consume", () => {
+test("receiveBeamBundle removes bundle by default after consume", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   const recvDir = path.join(tempDir, "recv");
@@ -163,19 +168,19 @@ test("receiveBeamBundle removes bundle by default after consume", () => {
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { beamCode, bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
-  acceptBeamBundle(bundlePath, beamCode, {
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  await acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   });
-  receiveBeamBundle(bundlePath, beamCode, recvDir, {
+  await receiveBeamBundle(bundlePath, beamCode, recvDir, {
     now: new Date("2026-04-17T06:56:00.000Z"),
   });
 
   assert.equal(fs.existsSync(bundlePath), false);
 });
 
-test("receiveBeamBundle rejects already-consumed bundle", () => {
+test("receiveBeamBundle rejects already-consumed bundle", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
   const sendDir = path.join(tempDir, "send");
   const recvDir = path.join(tempDir, "recv");
@@ -185,25 +190,25 @@ test("receiveBeamBundle rejects already-consumed bundle", () => {
   const filePath = path.join(tempDir, "artifact.txt");
   fs.writeFileSync(filePath, "beam payload\n", "utf-8");
 
-  const { beamCode, bundlePath } = writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
-  acceptBeamBundle(bundlePath, beamCode, {
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T06:50:00.000Z"));
+  await acceptBeamBundle(bundlePath, beamCode, {
     acceptedAt: new Date("2026-04-17T06:52:00.000Z"),
     receiverLabel: "per",
   });
-  receiveBeamBundle(bundlePath, beamCode, recvDir, {
+  await receiveBeamBundle(bundlePath, beamCode, recvDir, {
     deleteBundleOnConsume: false,
     now: new Date("2026-04-17T06:56:00.000Z"),
   });
 
-  assert.throws(() => receiveBeamBundle(bundlePath, beamCode, recvDir, {
+  await assert.rejects(() => receiveBeamBundle(bundlePath, beamCode, recvDir, {
     deleteBundleOnConsume: false,
     now: new Date("2026-04-17T06:57:00.000Z"),
   }));
 });
 
-test("renderOfferSummary exposes readable fields", () => {
+test("renderOfferSummary exposes readable PAKE fields", () => {
   const summary = renderOfferSummary({
-    schema: "claw-beam.bundle.v2",
+    schema: "claw-beam.bundle.v3",
     beam_code_hint: "7-neon-****",
     created_at: "2026-04-17T06:50:00.000Z",
     expires_at: "2026-04-17T07:05:00.000Z",
@@ -213,7 +218,8 @@ test("renderOfferSummary exposes readable fields", () => {
       receiver_label: "per",
     },
     session: {
-      key_wrap_stage: "accepted-session",
+      pake_suite: "ED25519-SHA256-HKDF-HMAC-SCRYPT",
+      key_wrap_stage: "pake-accepted-session",
     },
     handshake: {
       status: "receiver-accepted",
@@ -231,20 +237,23 @@ test("renderOfferSummary exposes readable fields", () => {
     security: {
       prototype_only: true,
       encrypted_payload: true,
+      pake_enabled: true,
       raw_code_stored_in_bundle: false,
     },
   });
 
-  assert.match(summary, /schema: claw-beam.bundle.v2/);
+  assert.match(summary, /schema: claw-beam.bundle.v3/);
   assert.match(summary, /beam code hint: 7-neon-\*\*\*\*/);
   assert.match(summary, /transfer_status: accepted/);
   assert.match(summary, /accepted_at: 2026-04-17T06:52:00.000Z/);
   assert.match(summary, /receiver_label: per/);
-  assert.match(summary, /key_wrap_stage: accepted-session/);
+  assert.match(summary, /pake_suite: ED25519-SHA256-HKDF-HMAC-SCRYPT/);
+  assert.match(summary, /key_wrap_stage: pake-accepted-session/);
   assert.match(summary, /handshake_status: receiver-accepted/);
   assert.match(summary, /transcript_hash: abc123/);
   assert.match(summary, /consumed_at: not-consumed/);
   assert.match(summary, /encrypted_payload: true/);
+  assert.match(summary, /pake_enabled: true/);
   assert.match(summary, /raw_code_stored_in_bundle: false/);
   assert.match(summary, /algorithm: aes-256-gcm/);
 });

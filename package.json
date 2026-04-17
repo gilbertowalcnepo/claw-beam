@@ -8,5 +8,8 @@
   },
   "scripts": {
     "test": "node --test"
+  },
+  "dependencies": {
+    "spake2": "^1.0.2"
   }
 }

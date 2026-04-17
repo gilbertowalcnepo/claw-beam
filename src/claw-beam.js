@@ -1,11 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 
-const FORMAT_VERSION = "claw-beam.bundle.v2";
+const require = createRequire(import.meta.url);
+const { spake2 } = require("spake2");
+
+const FORMAT_VERSION = "claw-beam.bundle.v3";
 const CODE_TTL_MS = 15 * 60 * 1000;
 const SESSION_INFO = Buffer.from("claw-beam-session-wrap", "utf-8");
-const HANDSHAKE_INFO = Buffer.from("claw-beam-handshake", "utf-8");
+const PAKE_WRAP_INFO = Buffer.from("claw-beam-pake-wrap", "utf-8");
+const PAKE_VERIFIER_WRAP_INFO = Buffer.from("claw-beam-pake-verifier-wrap", "utf-8");
+const PAKE_KDF_AAD = "claw-beam-pake-v1";
+const PAKE_MHF = { n: 16, r: 1, p: 1 };
+const PAKE_SALT_BYTES = 16;
+const PAKE_SUITE = "ED25519-SHA256-HKDF-HMAC-SCRYPT";
+const SENDER_IDENTITY = "claw-beam-sender";
+const RECEIVER_IDENTITY = "claw-beam-receiver";
 
 export function generateBeamCode() {
   const left = crypto.randomInt(1, 100);
@@ -18,22 +29,89 @@ export function generateNonce() {
   return crypto.randomBytes(16).toString("base64");
 }
 
+function generateSalt() {
+  return crypto.randomBytes(PAKE_SALT_BYTES).toString("base64");
+}
+
 export function maskBeamCode(code) {
   const [part1 = "??", part2 = "hidden"] = String(code).split("-");
   return `${part1}-${part2}-****`;
 }
 
-export function deriveBootstrapKey(code, senderNonce) {
-  return crypto.scryptSync(code, Buffer.from(senderNonce, "base64"), 32);
+function createSpakeInstance() {
+  return spake2({
+    suite: PAKE_SUITE,
+    mhf: PAKE_MHF,
+    kdf: { AAD: PAKE_KDF_AAD },
+  });
 }
 
-export function deriveSessionWrapKey(code, senderNonce, acceptNonce) {
-  const bootstrapKey = deriveBootstrapKey(code, senderNonce);
+async function derivePakeArtifacts(code, saltBase64) {
+  const salt = Buffer.from(saltBase64, "base64");
+  const instance = createSpakeInstance();
+  const verifier = await instance.computeVerifier(code, salt, SENDER_IDENTITY, RECEIVER_IDENTITY);
+  const clientState = await instance.startClient(SENDER_IDENTITY, RECEIVER_IDENTITY, code, salt);
+  const serverState = await instance.startServer(SENDER_IDENTITY, RECEIVER_IDENTITY, verifier);
+
+  const messageA = clientState.getMessage();
+  const messageB = serverState.getMessage();
+  const clientShared = clientState.finish(messageB);
+  const serverShared = serverState.finish(messageA);
+  const confirmationA = clientShared.getConfirmation();
+  serverShared.verify(confirmationA);
+  const confirmationB = serverShared.getConfirmation();
+  clientShared.verify(confirmationB);
+
+  return {
+    verifier: Buffer.from(verifier),
+    messageA: Buffer.from(messageA),
+    messageB: Buffer.from(messageB),
+    confirmationA: Buffer.from(confirmationA),
+    confirmationB: Buffer.from(confirmationB),
+    sharedKey: Buffer.from(clientShared.toBuffer()),
+    transcript: Buffer.from(clientShared.transcript),
+    transcriptHash: crypto.createHash("sha256").update(clientShared.transcript).digest("hex"),
+  };
+}
+
+async function derivePakeVerifier(code, saltBase64) {
+  const salt = Buffer.from(saltBase64, "base64");
+  const instance = createSpakeInstance();
+  return Buffer.from(await instance.computeVerifier(code, salt, SENDER_IDENTITY, RECEIVER_IDENTITY));
+}
+
+function derivePakeWrapKey(sharedKey, saltBuffer = Buffer.alloc(0)) {
   return Buffer.from(
     crypto.hkdfSync(
       "sha256",
-      bootstrapKey,
-      Buffer.from(acceptNonce, "base64"),
+      sharedKey,
+      saltBuffer,
+      PAKE_WRAP_INFO,
+      32,
+    ),
+  );
+}
+
+function deriveVerifierWrapKey(verifier, saltBuffer = Buffer.alloc(0)) {
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      verifier,
+      saltBuffer,
+      PAKE_VERIFIER_WRAP_INFO,
+      32,
+    ),
+  );
+}
+
+async function deriveSessionWrapKey(code, saltBase64, acceptNonceBase64) {
+  const verifier = await derivePakeVerifier(code, saltBase64);
+  const verifierWrapKey = deriveVerifierWrapKey(verifier, Buffer.from(saltBase64, "base64"));
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      verifierWrapKey,
+      Buffer.from(acceptNonceBase64, "base64"),
       SESSION_INFO,
       32,
     ),
@@ -44,30 +122,25 @@ function hashObject(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function buildSenderCommitment(code, senderNonce) {
-  const bootstrapKey = deriveBootstrapKey(code, senderNonce);
-  return crypto.createHash("sha256").update(HANDSHAKE_INFO).update(bootstrapKey).digest("hex");
-}
-
-function buildReceiverCommitment(code, senderNonce, acceptNonce) {
-  const sessionKey = deriveSessionWrapKey(code, senderNonce, acceptNonce);
-  return crypto.createHash("sha256").update(HANDSHAKE_INFO).update(Buffer.from("receiver", "utf-8")).update(sessionKey).digest("hex");
-}
-
 function buildTranscriptHash(bundle) {
   return hashObject({
     schema: bundle.schema,
     beam_code_hint: bundle.beam_code_hint,
     transfer: bundle.transfer,
     session: {
-      sender_nonce: bundle.session?.sender_nonce ?? null,
+      pake_salt: bundle.session?.pake_salt ?? null,
       accept_nonce: bundle.session?.accept_nonce ?? null,
       key_wrap_stage: bundle.session?.key_wrap_stage ?? null,
+      pake_suite: bundle.session?.pake_suite ?? null,
     },
     handshake: {
       status: bundle.handshake?.status ?? null,
-      sender_commitment: bundle.handshake?.sender_commitment ?? null,
-      receiver_commitment: bundle.handshake?.receiver_commitment ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+      verifier: bundle.handshake?.verifier ?? null,
+      sender_message: bundle.handshake?.sender_message ?? null,
+      receiver_message: bundle.handshake?.receiver_message ?? null,
+      sender_confirmation: bundle.handshake?.sender_confirmation ?? null,
+      receiver_confirmation: bundle.handshake?.receiver_confirmation ?? null,
     },
     file: bundle.file,
   });
@@ -95,7 +168,7 @@ export function decryptBufferWithKey(payload, key) {
   ]);
 }
 
-export function createBeamBundle(filePath, now = new Date()) {
+export async function createBeamBundle(filePath, now = new Date()) {
   const resolved = path.resolve(filePath);
   const stat = fs.statSync(resolved);
   if (!stat.isFile()) {
@@ -104,15 +177,18 @@ export function createBeamBundle(filePath, now = new Date()) {
 
   const basename = path.basename(resolved);
   const beamCode = generateBeamCode();
-  const senderNonce = generateNonce();
+  const pakeSalt = generateSalt();
   const payloadKey = crypto.randomBytes(32);
-  const bootstrapKey = deriveBootstrapKey(beamCode, senderNonce);
   const fileBytes = fs.readFileSync(resolved);
   const sha256 = crypto.createHash("sha256").update(fileBytes).digest("hex");
   const expiresAt = new Date(now.getTime() + CODE_TTL_MS).toISOString();
+  const pakeArtifacts = await derivePakeArtifacts(beamCode, pakeSalt);
 
   const payload = encryptBufferWithKey(fileBytes, payloadKey);
-  const keyWrap = encryptBufferWithKey(payloadKey, bootstrapKey);
+  const pakeWrapKey = derivePakeWrapKey(pakeArtifacts.sharedKey, Buffer.from(pakeSalt, "base64"));
+  const verifierWrapKey = deriveVerifierWrapKey(pakeArtifacts.verifier, Buffer.from(pakeSalt, "base64"));
+  const keyWrap = encryptBufferWithKey(payloadKey, pakeWrapKey);
+  const pakeSharedSecretWrap = encryptBufferWithKey(pakeArtifacts.sharedKey, verifierWrapKey);
 
   const bundle = {
     schema: FORMAT_VERSION,
@@ -125,15 +201,19 @@ export function createBeamBundle(filePath, now = new Date()) {
       receiver_label: null,
     },
     session: {
-      sender_nonce: senderNonce,
+      pake_salt: pakeSalt,
+      pake_suite: PAKE_SUITE,
       accept_nonce: null,
-      key_wrap_stage: "bootstrap",
+      key_wrap_stage: "pake-bootstrap",
     },
     handshake: {
       status: "sender-prepared",
-      sender_commitment: buildSenderCommitment(beamCode, senderNonce),
-      receiver_commitment: null,
-      transcript_hash: null,
+      verifier: pakeArtifacts.verifier.toString("base64"),
+      sender_message: pakeArtifacts.messageA.toString("base64"),
+      receiver_message: pakeArtifacts.messageB.toString("base64"),
+      sender_confirmation: pakeArtifacts.confirmationA.toString("base64"),
+      receiver_confirmation: pakeArtifacts.confirmationB.toString("base64"),
+      transcript_hash: pakeArtifacts.transcriptHash,
     },
     consumed_at: null,
     file: {
@@ -143,21 +223,23 @@ export function createBeamBundle(filePath, now = new Date()) {
     },
     payload,
     key_wrap: keyWrap,
+    pake_shared_secret_wrap: pakeSharedSecretWrap,
     security: {
       prototype_only: true,
       encrypted_payload: true,
       raw_code_stored_in_bundle: false,
-      notes: "Local encrypted POC. Bundle stores only a masked code hint and session-wrapped payload key.",
+      pake_enabled: true,
+      notes: "Local encrypted POC. Bundle stores only a masked code hint and PAKE-derived wrapped payload key.",
     },
   };
 
-  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
+  bundle.handshake.bundle_hash = buildTranscriptHash(bundle);
 
   return { bundle, beamCode };
 }
 
-export function writeBeamBundle(filePath, outDir = ".out", now = new Date()) {
-  const { bundle, beamCode } = createBeamBundle(filePath, now);
+export async function writeBeamBundle(filePath, outDir = ".out", now = new Date()) {
+  const { bundle, beamCode } = await createBeamBundle(filePath, now);
   const resolvedOutDir = path.resolve(outDir);
   fs.mkdirSync(resolvedOutDir, { recursive: true });
   const bundlePath = path.join(resolvedOutDir, `${path.basename(filePath)}.beam.json`);
@@ -173,17 +255,28 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
-function unwrapPayloadKeyFromBootstrap(bundle, code) {
-  const bootstrapKey = deriveBootstrapKey(code, bundle.session.sender_nonce);
-  return decryptBufferWithKey(bundle.key_wrap, bootstrapKey);
+async function recoverPakeSharedKey(bundle, code) {
+  const verifier = await derivePakeVerifier(code, bundle.session.pake_salt);
+  if (verifier.toString("base64") !== bundle.handshake.verifier) {
+    throw new Error("PAKE verifier mismatch.");
+  }
+  const verifierWrapKey = deriveVerifierWrapKey(verifier, Buffer.from(bundle.session.pake_salt, "base64"));
+  return decryptBufferWithKey(bundle.pake_shared_secret_wrap, verifierWrapKey);
 }
 
-function unwrapPayloadKeyFromAcceptedSession(bundle, code) {
-  const sessionKey = deriveSessionWrapKey(code, bundle.session.sender_nonce, bundle.session.accept_nonce);
+async function unwrapPayloadKeyFromPake(bundle, code) {
+  const sharedKey = await recoverPakeSharedKey(bundle, code);
+  const pakeWrapKey = derivePakeWrapKey(sharedKey, Buffer.from(bundle.session.pake_salt, "base64"));
+  return decryptBufferWithKey(bundle.key_wrap, pakeWrapKey);
+}
+
+async function unwrapPayloadKeyFromAcceptedSession(bundle, code) {
+  await recoverPakeSharedKey(bundle, code);
+  const sessionKey = await deriveSessionWrapKey(code, bundle.session.pake_salt, bundle.session.accept_nonce);
   return decryptBufferWithKey(bundle.key_wrap, sessionKey);
 }
 
-export function acceptBeamBundle(bundlePath, code, options = {}) {
+export async function acceptBeamBundle(bundlePath, code, options = {}) {
   const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
   const bundle = loadBundle(bundlePath);
   if (bundle.schema !== FORMAT_VERSION) {
@@ -199,9 +292,9 @@ export function acceptBeamBundle(bundlePath, code, options = {}) {
     throw new Error("Beam bundle already accepted.");
   }
 
-  const payloadKey = unwrapPayloadKeyFromBootstrap(bundle, code);
+  const payloadKey = await unwrapPayloadKeyFromPake(bundle, code);
   const acceptNonce = generateNonce();
-  const sessionKey = deriveSessionWrapKey(code, bundle.session.sender_nonce, acceptNonce);
+  const sessionKey = await deriveSessionWrapKey(code, bundle.session.pake_salt, acceptNonce);
   bundle.key_wrap = encryptBufferWithKey(payloadKey, sessionKey);
   bundle.transfer = bundle.transfer ?? {};
   bundle.transfer.status = "accepted";
@@ -209,11 +302,10 @@ export function acceptBeamBundle(bundlePath, code, options = {}) {
   bundle.transfer.receiver_label = receiverLabel;
   bundle.session = bundle.session ?? {};
   bundle.session.accept_nonce = acceptNonce;
-  bundle.session.key_wrap_stage = "accepted-session";
+  bundle.session.key_wrap_stage = "pake-accepted-session";
   bundle.handshake = bundle.handshake ?? {};
   bundle.handshake.status = "receiver-accepted";
-  bundle.handshake.receiver_commitment = buildReceiverCommitment(code, bundle.session.sender_nonce, acceptNonce);
-  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
+  bundle.handshake.bundle_hash = buildTranscriptHash(bundle);
   saveBundle(bundlePath, bundle);
   return bundle;
 }
@@ -225,12 +317,12 @@ export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
   bundle.transfer.status = "consumed";
   bundle.handshake = bundle.handshake ?? {};
   bundle.handshake.status = "completed";
-  bundle.handshake.transcript_hash = buildTranscriptHash(bundle);
+  bundle.handshake.bundle_hash = buildTranscriptHash(bundle);
   saveBundle(bundlePath, bundle);
   return bundle;
 }
 
-export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options = {}) {
+export async function receiveBeamBundle(bundlePath, code, outputDir = ".out", options = {}) {
   const { consume = true, deleteBundleOnConsume = true, now = new Date() } = options;
   const resolvedBundlePath = path.resolve(bundlePath);
   const bundle = loadBundle(resolvedBundlePath);
@@ -246,14 +338,14 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options 
   if (!bundle.transfer || bundle.transfer.status !== "accepted" || !bundle.transfer.accepted_at) {
     throw new Error("Beam bundle must be accepted before receive.");
   }
-  if (!bundle.session || bundle.session.key_wrap_stage !== "accepted-session" || !bundle.session.accept_nonce) {
+  if (!bundle.session || bundle.session.key_wrap_stage !== "pake-accepted-session" || !bundle.session.accept_nonce) {
     throw new Error("Beam session is incomplete.");
   }
-  if (!bundle.handshake || bundle.handshake.status !== "receiver-accepted" || !bundle.handshake.receiver_commitment) {
+  if (!bundle.handshake || bundle.handshake.status !== "receiver-accepted" || !bundle.handshake.transcript_hash) {
     throw new Error("Beam handshake is incomplete.");
   }
 
-  const payloadKey = unwrapPayloadKeyFromAcceptedSession(bundle, code);
+  const payloadKey = await unwrapPayloadKeyFromAcceptedSession(bundle, code);
   const plaintext = decryptBufferWithKey(bundle.payload, payloadKey);
   const actualSha = crypto.createHash("sha256").update(plaintext).digest("hex");
   if (actualSha !== bundle.file.sha256) {
@@ -285,6 +377,7 @@ export function renderOfferSummary(bundle) {
     `transfer_status: ${bundle.transfer?.status ?? "unknown"}`,
     `accepted_at: ${bundle.transfer?.accepted_at ?? "not-accepted"}`,
     `receiver_label: ${bundle.transfer?.receiver_label ?? "not-set"}`,
+    `pake_suite: ${bundle.session?.pake_suite ?? "unknown"}`,
     `key_wrap_stage: ${bundle.session?.key_wrap_stage ?? "unknown"}`,
     `handshake_status: ${bundle.handshake?.status ?? "unknown"}`,
     `transcript_hash: ${bundle.handshake?.transcript_hash ?? "missing"}`,
@@ -294,6 +387,7 @@ export function renderOfferSummary(bundle) {
     `sha256: ${bundle.file.sha256}`,
     `prototype_only: ${bundle.security.prototype_only}`,
     `encrypted_payload: ${bundle.security.encrypted_payload}`,
+    `pake_enabled: ${bundle.security.pake_enabled}`,
     `raw_code_stored_in_bundle: ${bundle.security.raw_code_stored_in_bundle}`,
     `algorithm: ${bundle.payload?.algorithm ?? "metadata-only"}`,
   ].join("\n");

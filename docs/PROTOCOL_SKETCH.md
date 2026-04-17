@@ -6,26 +6,22 @@ Create a secure one-time file transfer flow with wormhole-like UX and OpenClaw-f
 ## Current POC state
 The current proof of concept is local-only and bundle-based:
 - sender encrypts payload with a random payload key
-- sender wraps that payload key with a code-derived bootstrap key
-- sender records a sender-side handshake commitment
+- sender runs a bounded local SPAKE2 exchange derived from the human code
+- sender wraps the payload key with a PAKE-derived wrap key
+- sender stores a verifier-gated recovery wrap and PAKE transcript artifacts in the bundle
 - receiver explicitly accepts the bundle with the code
+- acceptance derives the PAKE verifier from the code and verifies bundle state
 - acceptance re-wraps the payload key into an accepted-session key
-- acceptance records a receiver-side handshake commitment and updates transcript state
 - receiver decrypts the payload using the accepted-session wrap
 - integrity is checked after decrypt
 - bundle is marked consumed and removed by default after receive
 
 This validates the CLI shape and a more realistic transfer-state model, but it is not yet a network protocol.
 
-## Why this handshake seam matters
-This prototype now has an explicit place to insert real PAKE messages later.
-Instead of hiding session state inside arbitrary bundle fields, the model now has:
-- sender-prepared handshake state
-- receiver-accepted handshake state
-- transcript hash updates across steps
-- an explicit distinction between transfer state and handshake state
-
-That means a later PAKE integration can replace the current commitments and code-derived wrapping without rewriting the whole UX model.
+## What changed in this step
+This prototype now uses a real SPAKE2-based shared secret instead of synthetic commitments or direct code-derived wrapping.
+Because SPAKE2 transcripts are randomized, the local bundle model uses verifier-gated recovery for the stored PAKE secret instead of pretending the transcript can be deterministically replayed later.
+That keeps the prototype honest while moving the core cryptography much closer to the intended final design.
 
 ## Target experience
 1. sender runs `claw-beam send ./artifact.zip`
@@ -64,9 +60,9 @@ That means a later PAKE integration can replace the current commitments and code
 - no distributed consume-proof yet
 
 ## Recommended next build order
-1. replace current code-derived bootstrap/session wrap with PAKE-backed session establishment
-2. replace current synthetic commitments with real PAKE transcript messages
-3. split metadata channel from encrypted payload channel over a mailbox-style rendezvous flow
-4. add blind relay
-5. add verifier phrase and session transcript checks
-6. add chunked payload streaming instead of whole-file bundle encryption
+1. move from local reproduced PAKE transcript to exchanged mailbox/rendezvous PAKE messages
+2. split metadata channel from encrypted payload channel over a mailbox-style rendezvous flow
+3. add blind relay
+4. add verifier phrase and session transcript checks
+5. add chunked payload streaming instead of whole-file bundle encryption
+6. add distributed consume enforcement or replay-resistant session closure

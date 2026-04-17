@@ -15,7 +15,7 @@ function makeTempFile() {
   return { tempDir, filePath };
 }
 
-test("CLI send prints real code but bundle stores only masked hint", () => {
+test("CLI send prints real code but bundle stores only masked hint and PAKE verifier/transcript artifacts", () => {
   const { tempDir, filePath } = makeTempFile();
 
   const sendResult = spawnSync("node", [cliPath, "send", filePath], {
@@ -27,10 +27,15 @@ test("CLI send prints real code but bundle stores only masked hint", () => {
 
   const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
   const bundle = JSON.parse(fs.readFileSync(bundlePath, "utf-8"));
-  assert.equal(bundle.schema, "claw-beam.bundle.v2");
+  assert.equal(bundle.schema, "claw-beam.bundle.v3");
   assert.equal(bundle.security.raw_code_stored_in_bundle, false);
+  assert.equal(bundle.security.pake_enabled, true);
   assert.equal(bundle.handshake.status, "sender-prepared");
   assert.match(bundle.handshake.transcript_hash, /^[a-f0-9]{64}$/);
+  assert.ok(bundle.handshake.verifier);
+  assert.ok(bundle.handshake.sender_message);
+  assert.ok(bundle.handshake.receiver_message);
+  assert.ok(bundle.pake_shared_secret_wrap);
   assert.match(bundle.beam_code_hint, /^\d{1,2}-[a-z]+-\*\*\*\*$/);
   const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
   assert.ok(codeMatch);
@@ -87,7 +92,7 @@ test("CLI accept requires correct code and then enables receive", () => {
   });
   assert.equal(acceptResult.status, 0);
   assert.match(acceptResult.stdout, /transfer_status: accepted/);
-  assert.match(acceptResult.stdout, /key_wrap_stage: accepted-session/);
+  assert.match(acceptResult.stdout, /key_wrap_stage: pake-accepted-session/);
   assert.match(acceptResult.stdout, /handshake_status: receiver-accepted/);
 });
 
