@@ -11,7 +11,7 @@ import {
 function usage() {
   console.error("Usage:");
   console.error("  claw-beam send <file>");
-  console.error("  claw-beam accept <bundle.json> [receiver-label]");
+  console.error("  claw-beam accept <bundle.json> <code> [receiver-label]");
   console.error("  claw-beam receive <bundle.json> <code> [--keep-bundle]");
   console.error("  claw-beam inspect <bundle.json>");
 }
@@ -29,21 +29,22 @@ function run() {
       usage();
       process.exit(1);
     }
-    const { bundle, bundlePath } = writeBeamBundle(arg1);
+    const { bundle, bundlePath, beamCode } = writeBeamBundle(arg1);
     console.log(`beam bundle written: ${bundlePath}`);
     console.log(renderOfferSummary(bundle));
-    console.log("next step: receiver should accept the bundle before receive.");
+    console.log(`beam code: ${beamCode}`);
+    console.log("next step: receiver should accept the bundle with the beam code before receive.");
     console.log("share the bundle file and beam code through separate channels for this POC.");
     return;
   }
 
   if (command === "accept") {
-    if (!arg1) {
+    if (!arg1 || !arg2) {
       usage();
       process.exit(1);
     }
-    const receiverLabel = arg2 || "receiver";
-    const bundle = acceptBeamBundle(arg1, { receiverLabel });
+    const receiverLabel = arg3 || "receiver";
+    const bundle = acceptBeamBundle(arg1, arg2, { receiverLabel });
     console.log(`beam accepted: ${path.resolve(arg1)}`);
     console.log(renderOfferSummary(bundle));
     return;
@@ -88,7 +89,14 @@ try {
   if (command === "receive") {
     console.error(error?.message === "Beam bundle must be accepted before receive."
       ? "Beam bundle must be accepted before receive."
-      : "Invalid beam code or corrupted bundle.");
+      : error?.message === "Beam session is incomplete."
+        ? "Beam session is incomplete."
+        : "Invalid beam code or corrupted bundle.");
+    process.exit(1);
+  }
+
+  if (command === "accept") {
+    console.error("Invalid beam code or corrupted bundle.");
     process.exit(1);
   }
 

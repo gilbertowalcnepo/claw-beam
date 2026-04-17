@@ -15,6 +15,27 @@ function makeTempFile() {
   return { tempDir, filePath };
 }
 
+test("CLI send prints real code but bundle stores only masked hint", () => {
+  const { tempDir, filePath } = makeTempFile();
+
+  const sendResult = spawnSync("node", [cliPath, "send", filePath], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(sendResult.status, 0);
+  assert.match(sendResult.stdout, /beam code: \d{1,2}-[a-z]+-[a-z]+/);
+
+  const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
+  const bundle = JSON.parse(fs.readFileSync(bundlePath, "utf-8"));
+  assert.equal(bundle.schema, "claw-beam.bundle.v2");
+  assert.equal(bundle.security.raw_code_stored_in_bundle, false);
+  assert.match(bundle.beam_code_hint, /^\d{1,2}-[a-z]+-\*\*\*\*$/);
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(codeMatch);
+  const emittedCode = codeMatch[1];
+  assert.equal(JSON.stringify(bundle).includes(emittedCode), false);
+});
+
 test("CLI receive requires explicit accept phase", () => {
   const { tempDir, filePath } = makeTempFile();
 
@@ -25,15 +46,46 @@ test("CLI receive requires explicit accept phase", () => {
   assert.equal(sendResult.status, 0);
 
   const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
-  const bundle = JSON.parse(fs.readFileSync(bundlePath, "utf-8"));
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(codeMatch);
 
-  const receiveResult = spawnSync("node", [cliPath, "receive", bundlePath, bundle.beam_code], {
+  const receiveResult = spawnSync("node", [cliPath, "receive", bundlePath, codeMatch[1]], {
     cwd: tempDir,
     encoding: "utf-8",
   });
 
   assert.equal(receiveResult.status, 1);
   assert.match(receiveResult.stderr, /Beam bundle must be accepted before receive\./);
+});
+
+test("CLI accept requires correct code and then enables receive", () => {
+  const { tempDir, filePath } = makeTempFile();
+
+  const sendResult = spawnSync("node", [cliPath, "send", filePath], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(sendResult.status, 0);
+
+  const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(codeMatch);
+  const beamCode = codeMatch[1];
+
+  const badAccept = spawnSync("node", [cliPath, "accept", bundlePath, "9-wrong-code", "per"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(badAccept.status, 1);
+  assert.match(badAccept.stderr, /Invalid beam code or corrupted bundle\./);
+
+  const acceptResult = spawnSync("node", [cliPath, "accept", bundlePath, beamCode, "per"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(acceptResult.status, 0);
+  assert.match(acceptResult.stdout, /transfer_status: accepted/);
+  assert.match(acceptResult.stdout, /key_wrap_stage: accepted-session/);
 });
 
 test("CLI receive shows clean error for wrong code", () => {
@@ -46,7 +98,11 @@ test("CLI receive shows clean error for wrong code", () => {
   assert.equal(sendResult.status, 0);
 
   const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
-  const acceptResult = spawnSync("node", [cliPath, "accept", bundlePath, "per"], {
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(codeMatch);
+  const beamCode = codeMatch[1];
+
+  const acceptResult = spawnSync("node", [cliPath, "accept", bundlePath, beamCode, "per"], {
     cwd: tempDir,
     encoding: "utf-8",
   });
@@ -72,16 +128,18 @@ test("CLI accept then receive completes flow", () => {
   assert.equal(sendResult.status, 0);
 
   const bundlePath = path.join(tempDir, ".out", "artifact.txt.beam.json");
-  const bundle = JSON.parse(fs.readFileSync(bundlePath, "utf-8"));
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(codeMatch);
+  const beamCode = codeMatch[1];
 
-  const acceptResult = spawnSync("node", [cliPath, "accept", bundlePath, "per"], {
+  const acceptResult = spawnSync("node", [cliPath, "accept", bundlePath, beamCode, "per"], {
     cwd: tempDir,
     encoding: "utf-8",
   });
   assert.equal(acceptResult.status, 0);
   assert.match(acceptResult.stdout, /transfer_status: accepted/);
 
-  const receiveResult = spawnSync("node", [cliPath, "receive", bundlePath, bundle.beam_code, "--keep-bundle"], {
+  const receiveResult = spawnSync("node", [cliPath, "receive", bundlePath, beamCode, "--keep-bundle"], {
     cwd: tempDir,
     encoding: "utf-8",
   });

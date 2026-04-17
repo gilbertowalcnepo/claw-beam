@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-const FORMAT_VERSION = "claw-beam.bundle.v1";
+const FORMAT_VERSION = "claw-beam.bundle.v2";
 const CODE_TTL_MS = 15 * 60 * 1000;
+const SESSION_INFO = Buffer.from("claw-beam-session-wrap", "utf-8");
 
 export function generateBeamCode() {
   const left = crypto.randomInt(1, 100);
@@ -12,22 +13,46 @@ export function generateBeamCode() {
   return `${left}-${wordsA[crypto.randomInt(0, wordsA.length)]}-${wordsB[crypto.randomInt(0, wordsB.length)]}`;
 }
 
-export function deriveBundleKey(code, salt) {
-  return crypto.scryptSync(code, salt, 32);
+export function generateNonce() {
+  return crypto.randomBytes(16).toString("base64");
 }
 
-export function encryptBufferWithCode(buffer, code) {
-  const salt = crypto.randomBytes(16);
+export function maskBeamCode(code) {
+  const [part1 = "??", part2 = "hidden"] = String(code).split("-");
+  return `${part1}-${part2}-****`;
+}
+
+export function deriveBootstrapKey(code, senderNonce) {
+  return crypto.scryptSync(code, Buffer.from(senderNonce, "base64"), 32);
+}
+
+export function deriveSessionWrapKey(code, senderNonce, acceptNonce) {
+  const bootstrapKey = deriveBootstrapKey(code, senderNonce);
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      bootstrapKey,
+      Buffer.from(acceptNonce, "base64"),
+      SESSION_INFO,
+      32,
+    ),
+  );
+}
+
+export function encryptBufferWithKey(buffer, key) {
   const iv = crypto.randomBytes(12);
-  const key = deriveBundleKey(code, salt);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return { salt, iv, encrypted, tag };
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: encrypted.toString("base64"),
+  };
 }
 
-export function decryptBufferWithCode(payload, code) {
-  const key = deriveBundleKey(code, Buffer.from(payload.salt, "base64"));
+export function decryptBufferWithKey(payload, key) {
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(payload.iv, "base64"));
   decipher.setAuthTag(Buffer.from(payload.tag, "base64"));
   return Buffer.concat([
@@ -45,49 +70,57 @@ export function createBeamBundle(filePath, now = new Date()) {
 
   const basename = path.basename(resolved);
   const beamCode = generateBeamCode();
+  const senderNonce = generateNonce();
+  const payloadKey = crypto.randomBytes(32);
+  const bootstrapKey = deriveBootstrapKey(beamCode, senderNonce);
   const fileBytes = fs.readFileSync(resolved);
   const sha256 = crypto.createHash("sha256").update(fileBytes).digest("hex");
   const expiresAt = new Date(now.getTime() + CODE_TTL_MS).toISOString();
-  const encrypted = encryptBufferWithCode(fileBytes, beamCode);
 
-  return {
+  const payload = encryptBufferWithKey(fileBytes, payloadKey);
+  const keyWrap = encryptBufferWithKey(payloadKey, bootstrapKey);
+
+  const bundle = {
     schema: FORMAT_VERSION,
     created_at: now.toISOString(),
     expires_at: expiresAt,
+    beam_code_hint: maskBeamCode(beamCode),
     transfer: {
       status: "awaiting-accept",
       accepted_at: null,
       receiver_label: null,
     },
+    session: {
+      sender_nonce: senderNonce,
+      accept_nonce: null,
+      key_wrap_stage: "bootstrap",
+    },
     consumed_at: null,
-    beam_code: beamCode,
     file: {
       name: basename,
       size_bytes: stat.size,
       sha256,
     },
-    payload: {
-      algorithm: "aes-256-gcm+scrypt",
-      salt: encrypted.salt.toString("base64"),
-      iv: encrypted.iv.toString("base64"),
-      tag: encrypted.tag.toString("base64"),
-      ciphertext: encrypted.encrypted.toString("base64"),
-    },
+    payload,
+    key_wrap: keyWrap,
     security: {
       prototype_only: true,
       encrypted_payload: true,
-      notes: "Local encrypted POC. Suitable for prototype evaluation only, not final protocol claims.",
+      raw_code_stored_in_bundle: false,
+      notes: "Local encrypted POC. Bundle stores only a masked code hint and session-wrapped payload key.",
     },
   };
+
+  return { bundle, beamCode };
 }
 
 export function writeBeamBundle(filePath, outDir = ".out", now = new Date()) {
-  const bundle = createBeamBundle(filePath, now);
+  const { bundle, beamCode } = createBeamBundle(filePath, now);
   const resolvedOutDir = path.resolve(outDir);
   fs.mkdirSync(resolvedOutDir, { recursive: true });
   const bundlePath = path.join(resolvedOutDir, `${path.basename(filePath)}.beam.json`);
   fs.writeFileSync(bundlePath, JSON.stringify(bundle, null, 2) + "\n", "utf-8");
-  return { bundle, bundlePath };
+  return { bundle, bundlePath, beamCode };
 }
 
 function loadBundle(bundlePath) {
@@ -98,7 +131,17 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
-export function acceptBeamBundle(bundlePath, options = {}) {
+function unwrapPayloadKeyFromBootstrap(bundle, code) {
+  const bootstrapKey = deriveBootstrapKey(code, bundle.session.sender_nonce);
+  return decryptBufferWithKey(bundle.key_wrap, bootstrapKey);
+}
+
+function unwrapPayloadKeyFromAcceptedSession(bundle, code) {
+  const sessionKey = deriveSessionWrapKey(code, bundle.session.sender_nonce, bundle.session.accept_nonce);
+  return decryptBufferWithKey(bundle.key_wrap, sessionKey);
+}
+
+export function acceptBeamBundle(bundlePath, code, options = {}) {
   const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
   const bundle = loadBundle(bundlePath);
   if (bundle.schema !== FORMAT_VERSION) {
@@ -110,15 +153,21 @@ export function acceptBeamBundle(bundlePath, options = {}) {
   if (new Date(bundle.expires_at).getTime() < acceptedAt.getTime()) {
     throw new Error("Beam code expired.");
   }
+  if (bundle.transfer?.status === "accepted") {
+    throw new Error("Beam bundle already accepted.");
+  }
 
-  bundle.transfer = bundle.transfer ?? {
-    status: "awaiting-accept",
-    accepted_at: null,
-    receiver_label: null,
-  };
+  const payloadKey = unwrapPayloadKeyFromBootstrap(bundle, code);
+  const acceptNonce = generateNonce();
+  const sessionKey = deriveSessionWrapKey(code, bundle.session.sender_nonce, acceptNonce);
+  bundle.key_wrap = encryptBufferWithKey(payloadKey, sessionKey);
+  bundle.transfer = bundle.transfer ?? {};
   bundle.transfer.status = "accepted";
   bundle.transfer.accepted_at = acceptedAt.toISOString();
   bundle.transfer.receiver_label = receiverLabel;
+  bundle.session = bundle.session ?? {};
+  bundle.session.accept_nonce = acceptNonce;
+  bundle.session.key_wrap_stage = "accepted-session";
   saveBundle(bundlePath, bundle);
   return bundle;
 }
@@ -148,8 +197,12 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options 
   if (!bundle.transfer || bundle.transfer.status !== "accepted" || !bundle.transfer.accepted_at) {
     throw new Error("Beam bundle must be accepted before receive.");
   }
+  if (!bundle.session || bundle.session.key_wrap_stage !== "accepted-session" || !bundle.session.accept_nonce) {
+    throw new Error("Beam session is incomplete.");
+  }
 
-  const plaintext = decryptBufferWithCode(bundle.payload, code);
+  const payloadKey = unwrapPayloadKeyFromAcceptedSession(bundle, code);
+  const plaintext = decryptBufferWithKey(bundle.payload, payloadKey);
   const actualSha = crypto.createHash("sha256").update(plaintext).digest("hex");
   if (actualSha !== bundle.file.sha256) {
     throw new Error("Integrity check failed after decryption.");
@@ -171,21 +224,23 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options 
   return { bundle: updatedBundle, outPath };
 }
 
-export function renderOfferSummary(offer) {
+export function renderOfferSummary(bundle) {
   return [
-    `schema: ${offer.schema}`,
-    `beam code: ${offer.beam_code}`,
-    `created: ${offer.created_at}`,
-    `expires: ${offer.expires_at}`,
-    `transfer_status: ${offer.transfer?.status ?? "unknown"}`,
-    `accepted_at: ${offer.transfer?.accepted_at ?? "not-accepted"}`,
-    `receiver_label: ${offer.transfer?.receiver_label ?? "not-set"}`,
-    `consumed_at: ${offer.consumed_at ?? "not-consumed"}`,
-    `file: ${offer.file.name}`,
-    `size_bytes: ${offer.file.size_bytes}`,
-    `sha256: ${offer.file.sha256}`,
-    `prototype_only: ${offer.security.prototype_only}`,
-    `encrypted_payload: ${offer.security.encrypted_payload}`,
-    `algorithm: ${offer.payload?.algorithm ?? "metadata-only"}`,
+    `schema: ${bundle.schema}`,
+    `beam code hint: ${bundle.beam_code_hint ?? "not-available"}`,
+    `created: ${bundle.created_at}`,
+    `expires: ${bundle.expires_at}`,
+    `transfer_status: ${bundle.transfer?.status ?? "unknown"}`,
+    `accepted_at: ${bundle.transfer?.accepted_at ?? "not-accepted"}`,
+    `receiver_label: ${bundle.transfer?.receiver_label ?? "not-set"}`,
+    `key_wrap_stage: ${bundle.session?.key_wrap_stage ?? "unknown"}`,
+    `consumed_at: ${bundle.consumed_at ?? "not-consumed"}`,
+    `file: ${bundle.file.name}`,
+    `size_bytes: ${bundle.file.size_bytes}`,
+    `sha256: ${bundle.file.sha256}`,
+    `prototype_only: ${bundle.security.prototype_only}`,
+    `encrypted_payload: ${bundle.security.encrypted_payload}`,
+    `raw_code_stored_in_bundle: ${bundle.security.raw_code_stored_in_bundle}`,
+    `algorithm: ${bundle.payload?.algorithm ?? "metadata-only"}`,
   ].join("\n");
 }

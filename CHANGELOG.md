@@ -8,4 +8,6 @@
 - Added one-time-like receive semantics with consumption tracking and default bundle removal.
 - Added CLI error handling so wrong codes return a clean user-facing message.
 - Added explicit accept step and transfer-state tracking (`awaiting-accept` -> `accepted` -> `consumed`).
-- Added tests for encrypted round-trip, wrong-code rejection, consume behavior, accept gating, and CLI flow.
+- Reworked the bundle flow so the raw beam code is no longer stored in the bundle.
+- Added session-wrapped payload-key flow: bootstrap key wrap at send, accepted-session re-wrap at accept, accepted-session unwrap at receive.
+- Added tests for masked code hints, accept-time code verification, session wrap transitions, and CLI flow.
