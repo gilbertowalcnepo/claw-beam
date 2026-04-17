@@ -8,11 +8,12 @@ This is a **bounded proof of concept**.
 
 It now includes:
 - local encrypted beam bundle creation
+- explicit receiver accept step before receive
 - code-derived decryption for receive flow
 - integrity verification after decrypt
 - bundle consumption tracking
 - optional bundle deletion on receive
-- simple CLI for send, receive, and inspect
+- simple CLI for send, accept, receive, and inspect
 
 It is still **not** a final wormhole-equivalent secure transport.
 There is no live rendezvous server, no blind relay, and no PAKE yet.
@@ -24,12 +25,16 @@ There is no live rendezvous server, no blind relay, and no PAKE yet.
   - generates a one-time beam code
   - encrypts the file into a local JSON bundle
   - writes the bundle to `.out/<filename>.beam.json`
+  - leaves transfer state at `awaiting-accept`
+- `claw-beam accept <bundle.json> [receiver-label]`
+  - records explicit receiver acceptance
+  - moves transfer state to `accepted`
 - `claw-beam receive <bundle.json> <code>`
+  - requires the bundle to have been accepted first
   - decrypts the bundle using the beam code
   - verifies integrity with SHA-256
   - marks the bundle consumed
   - removes the bundle by default after successful receive
-  - returns a clean user-facing error for invalid code or corrupted bundle
 - `claw-beam receive <bundle.json> <code> --keep-bundle`
   - same as above, but preserves the bundle for inspection
 - `claw-beam inspect <bundle.json>`
@@ -42,6 +47,7 @@ This is still a **prototype**.
 What it proves:
 - naming and UX shape
 - local encrypted handoff bundle flow
+- explicit sender/receiver acceptance state
 - code-derived payload decryption
 - one-time-like consumption behavior in local artifacts
 - future transition path to a real protocol
@@ -69,7 +75,8 @@ claw-beam should eventually support:
 ## Proposed future commands
 
 - `claw-beam send ./file.zip`
-- `claw-beam receive`
+- `claw-beam accept ./bundle.json per`
+- `claw-beam receive ./bundle.json CODE`
 - `claw-beam inspect ./bundle.json`
 - `claw-beam relay`
 - `claw-beam mailbox`
@@ -90,6 +97,7 @@ Recommended secure design for a future real version:
 - `src/claw-beam.js` - POC implementation
 - `docs/PROTOCOL_SKETCH.md` - future protocol notes
 - `test/claw-beam.test.js` - unit tests
+- `test/cli.test.js` - CLI regression tests
 
 ## Development note
 

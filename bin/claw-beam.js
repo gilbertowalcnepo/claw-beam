@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  acceptBeamBundle,
   receiveBeamBundle,
   renderOfferSummary,
   writeBeamBundle,
@@ -10,6 +11,7 @@ import {
 function usage() {
   console.error("Usage:");
   console.error("  claw-beam send <file>");
+  console.error("  claw-beam accept <bundle.json> [receiver-label]");
   console.error("  claw-beam receive <bundle.json> <code> [--keep-bundle]");
   console.error("  claw-beam inspect <bundle.json>");
 }
@@ -30,7 +32,20 @@ function run() {
     const { bundle, bundlePath } = writeBeamBundle(arg1);
     console.log(`beam bundle written: ${bundlePath}`);
     console.log(renderOfferSummary(bundle));
+    console.log("next step: receiver should accept the bundle before receive.");
     console.log("share the bundle file and beam code through separate channels for this POC.");
+    return;
+  }
+
+  if (command === "accept") {
+    if (!arg1) {
+      usage();
+      process.exit(1);
+    }
+    const receiverLabel = arg2 || "receiver";
+    const bundle = acceptBeamBundle(arg1, { receiverLabel });
+    console.log(`beam accepted: ${path.resolve(arg1)}`);
+    console.log(renderOfferSummary(bundle));
     return;
   }
 
@@ -71,7 +86,9 @@ try {
   process.exit(0);
 } catch (error) {
   if (command === "receive") {
-    console.error("Invalid beam code or corrupted bundle.");
+    console.error(error?.message === "Beam bundle must be accepted before receive."
+      ? "Beam bundle must be accepted before receive."
+      : "Invalid beam code or corrupted bundle.");
     process.exit(1);
   }
 

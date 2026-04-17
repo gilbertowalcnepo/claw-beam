@@ -54,6 +54,11 @@ export function createBeamBundle(filePath, now = new Date()) {
     schema: FORMAT_VERSION,
     created_at: now.toISOString(),
     expires_at: expiresAt,
+    transfer: {
+      status: "awaiting-accept",
+      accepted_at: null,
+      receiver_label: null,
+    },
     consumed_at: null,
     beam_code: beamCode,
     file: {
@@ -93,9 +98,36 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
+export function acceptBeamBundle(bundlePath, options = {}) {
+  const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
+  const bundle = loadBundle(bundlePath);
+  if (bundle.schema !== FORMAT_VERSION) {
+    throw new Error(`Unsupported bundle schema: ${bundle.schema}`);
+  }
+  if (bundle.consumed_at) {
+    throw new Error("Cannot accept a consumed beam bundle.");
+  }
+  if (new Date(bundle.expires_at).getTime() < acceptedAt.getTime()) {
+    throw new Error("Beam code expired.");
+  }
+
+  bundle.transfer = bundle.transfer ?? {
+    status: "awaiting-accept",
+    accepted_at: null,
+    receiver_label: null,
+  };
+  bundle.transfer.status = "accepted";
+  bundle.transfer.accepted_at = acceptedAt.toISOString();
+  bundle.transfer.receiver_label = receiverLabel;
+  saveBundle(bundlePath, bundle);
+  return bundle;
+}
+
 export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
   const bundle = loadBundle(bundlePath);
   bundle.consumed_at = consumedAt.toISOString();
+  bundle.transfer = bundle.transfer ?? {};
+  bundle.transfer.status = "consumed";
   saveBundle(bundlePath, bundle);
   return bundle;
 }
@@ -112,6 +144,9 @@ export function receiveBeamBundle(bundlePath, code, outputDir = ".out", options 
   }
   if (new Date(bundle.expires_at).getTime() < now.getTime()) {
     throw new Error("Beam code expired.");
+  }
+  if (!bundle.transfer || bundle.transfer.status !== "accepted" || !bundle.transfer.accepted_at) {
+    throw new Error("Beam bundle must be accepted before receive.");
   }
 
   const plaintext = decryptBufferWithCode(bundle.payload, code);
@@ -142,6 +177,9 @@ export function renderOfferSummary(offer) {
     `beam code: ${offer.beam_code}`,
     `created: ${offer.created_at}`,
     `expires: ${offer.expires_at}`,
+    `transfer_status: ${offer.transfer?.status ?? "unknown"}`,
+    `accepted_at: ${offer.transfer?.accepted_at ?? "not-accepted"}`,
+    `receiver_label: ${offer.transfer?.receiver_label ?? "not-set"}`,
     `consumed_at: ${offer.consumed_at ?? "not-consumed"}`,
     `file: ${offer.file.name}`,
     `size_bytes: ${offer.file.size_bytes}`,
