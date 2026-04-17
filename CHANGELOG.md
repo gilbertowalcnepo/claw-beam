@@ -15,3 +15,4 @@
 - Added verifier-gated PAKE secret recovery for the local bundle model and accepted-session re-wraps derived from verified code material.
 - Added tests for PAKE-backed bundle creation, accept/receive transitions, wrong-code rejection, and CLI flow.
 - Added a local rendezvous mailbox stub with published offer ids, receipt tracking, inspect flow, and CLI offer commands.
+- Added a tiny HTTP rendezvous server plus HTTP publish, inspect, accept, and receive flows validated through tests and CLI.

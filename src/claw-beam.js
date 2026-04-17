@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import http from "node:http";
+import https from "node:https";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -256,6 +258,42 @@ function saveBundle(bundlePath, bundle) {
   fs.writeFileSync(path.resolve(bundlePath), JSON.stringify(bundle, null, 2) + "\n", "utf-8");
 }
 
+function requestJson(method, targetUrl, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(targetUrl);
+    const transport = parsed.protocol === "https:" ? https : http;
+    const payload = body == null ? null : JSON.stringify(body);
+    const req = transport.request({
+      method,
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      headers: payload
+        ? {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+          }
+        : undefined,
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf-8");
+        const parsedBody = raw ? JSON.parse(raw) : {};
+        if ((res.statusCode ?? 500) >= 400) {
+          reject(new Error(parsedBody.error || `HTTP ${res.statusCode}`));
+          return;
+        }
+        resolve(parsedBody);
+      });
+    });
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 function ensureRendezvousDirs(rendezvousDir) {
   const resolved = path.resolve(rendezvousDir);
   fs.mkdirSync(path.join(resolved, "offers"), { recursive: true });
@@ -367,6 +405,22 @@ export function inspectBeamOffer(rendezvousDir, offerId) {
   return { bundle, receipt };
 }
 
+export async function publishBeamBundleToHttpRendezvous(bundlePath, baseUrl, options = {}) {
+  const { offerId, publishedAt = new Date() } = options;
+  const bundle = loadBundle(bundlePath);
+  const response = await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers`, {
+    offer_id: offerId,
+    published_at: publishedAt.toISOString(),
+    bundle,
+  });
+  return { offerId: response.offer_id, receipt: response.receipt, bundle };
+}
+
+export async function inspectBeamOfferHttp(baseUrl, offerId) {
+  const response = await requestJson("GET", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}`);
+  return { receipt: response.receipt, bundle: response.bundle };
+}
+
 export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}) {
   const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
   const offerPath = getOfferBundlePath(rendezvousDir, offerId);
@@ -382,6 +436,26 @@ export async function acceptBeamOffer(rendezvousDir, offerId, code, options = {}
   };
   fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", "utf-8");
   return { bundle: acceptedBundle, receipt };
+}
+
+export async function acceptBeamOfferHttp(baseUrl, offerId, code, options = {}) {
+  const { acceptedAt = new Date(), receiverLabel = "receiver" } = options;
+  const inspected = await inspectBeamOfferHttp(baseUrl, offerId);
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-claw-beam-http-"));
+  const tempBundlePath = path.join(tempDir, `${offerId}.beam.json`);
+  fs.writeFileSync(tempBundlePath, JSON.stringify(inspected.bundle, null, 2) + "\n", "utf-8");
+  const bundle = await acceptBeamBundle(tempBundlePath, code, { acceptedAt, receiverLabel });
+  await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/accept`, {
+    offer_status: bundle.transfer?.status,
+    accepted_at: bundle.transfer?.accepted_at,
+    receiver_label: bundle.transfer?.receiver_label,
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+    },
+    bundle,
+  });
+  return { bundle, receipt: (await inspectBeamOfferHttp(baseUrl, offerId)).receipt };
 }
 
 export function markBundleConsumed(bundlePath, consumedAt = new Date()) {
@@ -454,6 +528,24 @@ export async function receiveBeamOffer(rendezvousDir, offerId, code, outputDir =
   };
   fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + "\n", "utf-8");
   return { bundle, outPath, receipt };
+}
+
+export async function receiveBeamOfferHttp(baseUrl, offerId, code, outputDir = ".out", options = {}) {
+  const inspected = await inspectBeamOfferHttp(baseUrl, offerId);
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-claw-beam-http-"));
+  const tempBundlePath = path.join(tempDir, `${offerId}.beam.json`);
+  fs.writeFileSync(tempBundlePath, JSON.stringify(inspected.bundle, null, 2) + "\n", "utf-8");
+  const { bundle, outPath } = await receiveBeamBundle(tempBundlePath, code, outputDir, options);
+  await requestJson("POST", `${baseUrl.replace(/\/$/, "")}/offers/${offerId}/consume`, {
+    offer_status: bundle.transfer?.status,
+    consumed_at: bundle.consumed_at,
+    handshake: {
+      status: bundle.handshake?.status ?? null,
+      transcript_hash: bundle.handshake?.transcript_hash ?? null,
+    },
+    bundle,
+  });
+  return { bundle, outPath, receipt: (await inspectBeamOfferHttp(baseUrl, offerId)).receipt };
 }
 
 export function renderRendezvousSummary(receipt) {

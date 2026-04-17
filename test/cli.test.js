@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const repoRoot = "/home/declanops/.openclaw/workspace/clawboard-common/shared/development/claw-beam";
 const cliPath = path.join(repoRoot, "bin", "claw-beam.js");
@@ -162,6 +162,73 @@ test("CLI send-rendezvous, accept-offer, and receive-offer complete local mailbo
   });
   assert.equal(receiveResult.status, 0);
   assert.match(receiveResult.stdout, /beam received:/);
+  assert.match(receiveResult.stdout, /offer_status: consumed/);
+  assert.match(receiveResult.stdout, /handshake_status: completed/);
+});
+
+test("CLI send-http, accept-http, inspect-http, and receive-http complete local HTTP mailbox flow", async (t) => {
+  const { tempDir, filePath } = makeTempFile();
+  const storeDir = path.join(tempDir, "http-store");
+  const server = spawn("node", [cliPath, "serve-rendezvous", storeDir, "0"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const baseUrl = await new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => reject(new Error(`server start timeout: ${stderr}`)), 10000);
+    server.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      const match = stdout.match(/rendezvous listening: (http:\/\/127\.0\.0\.1:\d+)/);
+      if (match) {
+        clearTimeout(timeout);
+        resolve(match[1]);
+      }
+    });
+    server.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    server.on("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`server exited early with code ${code}: ${stderr}`));
+    });
+  });
+
+  t.after(() => {
+    server.kill("SIGTERM");
+  });
+
+  const sendResult = spawnSync("node", [cliPath, "send-http", filePath, baseUrl], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(sendResult.status, 0);
+  const offerMatch = sendResult.stdout.match(/offer published: ([a-f0-9]{16})/);
+  const codeMatch = sendResult.stdout.match(/beam code: (\d{1,2}-[a-z]+-[a-z]+)/);
+  assert.ok(offerMatch);
+  assert.ok(codeMatch);
+
+  const acceptResult = spawnSync("node", [cliPath, "accept-http", baseUrl, offerMatch[1], codeMatch[1], "per"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(acceptResult.status, 0);
+  assert.match(acceptResult.stdout, /offer_status: accepted/);
+
+  const inspectResult = spawnSync("node", [cliPath, "inspect-http", baseUrl, offerMatch[1]], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(inspectResult.status, 0);
+  assert.match(inspectResult.stdout, /offer_id: /);
+
+  const receiveResult = spawnSync("node", [cliPath, "receive-http", baseUrl, offerMatch[1], codeMatch[1], "--keep-bundle"], {
+    cwd: tempDir,
+    encoding: "utf-8",
+  });
+  assert.equal(receiveResult.status, 0);
   assert.match(receiveResult.stdout, /offer_status: consumed/);
   assert.match(receiveResult.stdout, /handshake_status: completed/);
 });

@@ -7,15 +7,20 @@ import path from "node:path";
 import {
   acceptBeamBundle,
   acceptBeamOffer,
+  acceptBeamOfferHttp,
   createBeamBundle,
   inspectBeamOffer,
+  inspectBeamOfferHttp,
+  publishBeamBundleToHttpRendezvous,
   publishBeamBundleToRendezvous,
   receiveBeamBundle,
   receiveBeamOffer,
+  receiveBeamOfferHttp,
   renderOfferSummary,
   renderRendezvousSummary,
   writeBeamBundle,
 } from "../src/claw-beam.js";
+import { createRendezvousHttpServer } from "../src/rendezvous-http.js";
 
 test("createBeamBundle builds encrypted prototype metadata for a file without storing raw code and with PAKE verifier/transcript artifacts", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-"));
@@ -249,6 +254,50 @@ test("rendezvous publish, accept, inspect, and receive flow works through local 
   });
   assert.equal(fs.readFileSync(received.outPath, "utf-8"), "beam rendezvous payload\n");
   assert.equal(received.bundle.transfer.status, "consumed");
+  assert.equal(received.receipt.offer_status, "consumed");
+  assert.equal(received.receipt.handshake.status, "completed");
+});
+
+test("http rendezvous publish, accept, inspect, and receive flow works through local server", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-http-rendezvous-"));
+  const sendDir = path.join(tempDir, "send");
+  const recvDir = path.join(tempDir, "recv");
+  fs.mkdirSync(sendDir, { recursive: true });
+  fs.mkdirSync(recvDir, { recursive: true });
+
+  const runtime = createRendezvousHttpServer({ storeDir: path.join(tempDir, "store") });
+  t.after(async () => {
+    await runtime.close();
+  });
+  const address = await runtime.listen(0);
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const filePath = path.join(tempDir, "artifact.txt");
+  fs.writeFileSync(filePath, "beam http rendezvous payload\n", "utf-8");
+
+  const { beamCode, bundlePath } = await writeBeamBundle(filePath, sendDir, new Date("2026-04-17T07:10:00.000Z"));
+  const published = await publishBeamBundleToHttpRendezvous(bundlePath, baseUrl, {
+    publishedAt: new Date("2026-04-17T07:11:00.000Z"),
+  });
+  assert.ok(published.offerId);
+  assert.equal(published.receipt.offer_status, "awaiting-accept");
+
+  const accepted = await acceptBeamOfferHttp(baseUrl, published.offerId, beamCode, {
+    acceptedAt: new Date("2026-04-17T07:12:00.000Z"),
+    receiverLabel: "per",
+  });
+  assert.equal(accepted.bundle.transfer.status, "accepted");
+  assert.equal(accepted.receipt.offer_status, "accepted");
+
+  const inspected = await inspectBeamOfferHttp(baseUrl, published.offerId);
+  assert.equal(inspected.receipt.offer_id, published.offerId);
+  assert.equal(inspected.bundle.transfer.status, "accepted");
+
+  const received = await receiveBeamOfferHttp(baseUrl, published.offerId, beamCode, recvDir, {
+    deleteBundleOnConsume: false,
+    now: new Date("2026-04-17T07:13:00.000Z"),
+  });
+  assert.equal(fs.readFileSync(received.outPath, "utf-8"), "beam http rendezvous payload\n");
   assert.equal(received.receipt.offer_status, "consumed");
   assert.equal(received.receipt.handshake.status, "completed");
 });
