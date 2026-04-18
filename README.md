@@ -1,142 +1,166 @@
 # claw-beam
 
-claw-beam is a shared-development prototype for a secure, one-time file transfer tool with a fun OpenClaw-flavored identity.
+Secure one-time file transfer prototype — wormhole-like UX with SPAKE2 PAKE.
 
-## Current state
+> ⚠️ **This is a prototype.** Not production-hardened. No blind relay, no distributed consume-proof, no transport replay protection, no audited PAKE suitability. See Security below.
 
-This is a **bounded proof of concept**.
+## Quick start
 
-It now includes:
-- local encrypted beam bundle creation
-- explicit receiver accept step before receive
-- real SPAKE2-backed session establishment
-- PAKE-derived payload-key wrapping
-- local rendezvous mailbox stub for offer publish, accept, inspect, and receive
-- tiny HTTP rendezvous server for the same offer lifecycle, with immutable published offer bundle, separate mutable rendezvous state, and explicit handshake event logging
-- integrity verification after decrypt
-- bundle consumption tracking
-- optional bundle deletion on receive
-- simple CLI for send, accept, receive, inspect, and both local and HTTP rendezvous-backed offer flow
+### Send a file
 
-It is still **not** a final wormhole-equivalent secure transport.
-There is no blind relay and no chunked transfer yet. The current rendezvous path now has two bounded forms: a local mailbox stub and a tiny HTTP mailbox server. The HTTP form now keeps the published offer bundle immutable after publish and records accept/consume mutations in separate rendezvous state, which is a safer seam for later message-based exchange.
+```bash
+claw-beam send --filepath secret.txt
+```
 
-## Current POC behavior
+This starts a temporary rendezvous server, encrypts your file, and prints a **beam token**:
 
-- `claw-beam send <file>`
-  - reads a local file
-  - generates a one-time beam code
-  - creates a random payload key
-  - runs a bounded local SPAKE2 exchange derived from the code
-  - encrypts the payload with the payload key
-  - wraps the payload key with a PAKE-derived wrap key
-  - stores a verifier-gated recovery wrap plus PAKE transcript artifacts in the bundle
-  - writes the bundle to `.out/<filename>.beam.json`
-  - prints the beam code to the sender, but stores only a masked code hint in the bundle
-  - leaves transfer state at `awaiting-accept`
-- `claw-beam accept <bundle.json> <code> [receiver-label]`
-  - derives the PAKE verifier from the code and verifies it against bundle state
-  - recovers the stored PAKE shared secret through a verifier-gated wrap
-  - unwraps the payload key from the PAKE bootstrap wrap
-  - re-wraps the payload key into an accepted-session key using verifier-derived session material + accept nonce
-  - records explicit receiver acceptance
-  - moves transfer state to `accepted`
-- `claw-beam receive <bundle.json> <code>`
-  - requires the bundle to have been accepted first
-  - derives the PAKE verifier from the code and verifies it against bundle state
-  - derives the accepted-session unwrap key from verifier-derived session material and accept nonce
-  - decrypts the payload using the recovered payload key
-  - verifies integrity with SHA-256
-  - marks the bundle consumed and sets handshake state to completed
-  - removes the bundle by default after successful receive
-- `claw-beam receive <bundle.json> <code> --keep-bundle`
-  - same as above, but preserves the bundle for inspection
-- `claw-beam inspect <bundle.json>`
-  - prints human-readable metadata summary
-- `claw-beam send-rendezvous <file> <rendezvous-dir>`
-  - writes a normal bundle locally
-  - publishes an offer into a local mailbox-style rendezvous directory
-  - returns an offer id plus the beam code
-- `claw-beam accept-offer <rendezvous-dir> <offer-id> <code> [receiver-label]`
-  - accepts an offer directly from the mailbox stub
-  - updates offer receipt state to accepted
-- `claw-beam receive-offer <rendezvous-dir> <offer-id> <code>`
-  - receives directly from the mailbox stub
-  - updates offer receipt state to consumed
-- `claw-beam inspect-offer <rendezvous-dir> <offer-id>`
-  - prints human-readable rendezvous receipt and bundle summary
-- `claw-beam serve-rendezvous [store-dir] [port]`
-  - starts a tiny local HTTP rendezvous server
-  - persists offers and receipts on disk
-- `claw-beam send-http <file> <base-url>`
-  - publishes an offer to the HTTP rendezvous server
-- `claw-beam accept-http <base-url> <offer-id> <code> [receiver-label]`
-  - accepts an HTTP-hosted offer
-- `claw-beam receive-http <base-url> <offer-id> <code>`
-  - receives and consumes an HTTP-hosted offer
-- `claw-beam inspect-http <base-url> <offer-id>`
-  - inspects an HTTP-hosted offer
+```
+✉ beam sent
+  file: secret.txt (42 bytes)
+  token: eyJiYXNlVXJsIjoiaHR0cDovLzEyNy4wLjAuMTo0...
+  rendezvous: http://127.0.0.1:41921
+  offer: 5528de5312d39c74
+  code: 39-lumen-comet
 
-## Important security warning
+Share the token with the receiver. They run:
+  claw-beam receive --token eyJiYXNlVXJsIjoiaHR0cDovLzEyNy4wLjAuMTo0...
 
-This is still a **prototype**.
+Server is running. Press Ctrl+C when transfer is complete.
+```
 
-What it proves:
-- naming and UX shape
-- local encrypted handoff bundle flow
-- real SPAKE2-backed session establishment in the prototype
-- payload encryption separated from the raw beam code
-- bundle no longer stores the raw beam code
-- one-time-like consumption behavior in local artifacts
-- future transition path to a real protocol
+### Receive a file
 
-What it does **not** prove yet:
-- online rendezvous security
-- relay blindness in practice
-- audited PAKE implementation suitability for production use
-- transport/session replay protections across distributed peers
-- distributed one-time enforcement across peers
-- full protocol hardening
+```bash
+claw-beam receive --token <token>
+```
 
-Do not use this POC for high-sensitivity production secrets.
+Or specify an output directory:
 
-## Product goal
+```bash
+claw-beam receive --token <token> --filespath ./downloads
+```
 
-claw-beam should eventually support:
-- short one-time transfer codes
-- sender/receiver rendezvous
-- PAKE-style shared secret establishment
-- end-to-end encrypted metadata and payload transfer
-- blind relay support
-- single-use expiration and integrity verification
+Output:
+```
+✅ beam received
+  file: secret.txt
+  size: 42 bytes
+  sha256: a1b2c3...
+  path: ./downloads/secret.txt
+```
 
-## Proposed future commands
+### That's it.
 
-- `claw-beam send ./file.zip`
-- `claw-beam accept ./bundle.json CODE per`
-- `claw-beam receive ./bundle.json CODE`
-- `claw-beam inspect ./bundle.json`
-- `claw-beam relay`
-- `claw-beam mailbox`
+**Sender**: `send --filepath <file>` → share the token  
+**Receiver**: `receive --token <token>` → file appears
 
-## Design direction
+The token carries everything: server URL, offer ID, and the PAKE-derived session code. No manual steps in between.
 
-Recommended secure design for a future real version:
-- PAKE: SPAKE2 or CPace
-- key derivation: HKDF-SHA256
-- transport encryption: Noise or libsodium AEAD/secretstream
-- relay blindness by default
-- short-lived single-use codes
-- verifier phrase for human confirmation
+## Install
 
-## Files of interest
+```bash
+# From source
+git clone <repo-url>
+cd claw-beam
+npm install
 
-- `bin/claw-beam.js` - CLI entrypoint
-- `src/claw-beam.js` - POC implementation
-- `docs/PROTOCOL_SKETCH.md` - future protocol notes
-- `test/claw-beam.test.js` - unit tests
-- `test/cli.test.js` - CLI regression tests
+# Run directly
+node bin/claw-beam.js send --filepath myfile.txt
+```
 
-## Development note
+### Quick test (local)
 
-This repo lives in shared development because the current task is product/protocol prototyping, not production rollout.
+```bash
+bash scripts/quick-e2e.sh
+```
+
+This runs a full end-to-end test: rendezvous server, send, accept, receive, and the simplified send/receive flow.
+
+## How it works
+
+1. **Sender** runs `send --filepath <file>`. claw-beam:
+   - Encrypts the file with a random payload key (AES-256-GCM)
+   - Derives a session key via SPAKE2 PAKE from a human-readable beam code
+   - Wraps the payload key with the PAKE-derived session key
+   - Starts a local HTTP rendezvous server
+   - Auto-accepts the offer so the receiver can immediately receive
+   - Prints a single token encoding the server URL, offer ID, and beam code
+
+2. **Receiver** runs `receive --token <token>`. claw-beam:
+   - Decodes the token to get the server URL, offer ID, and beam code
+   - Derives the same PAKE session key from the beam code
+   - Unwraps the payload key, decrypts the file
+   - Writes the file to disk and verifies SHA-256 integrity
+
+The PAKE ensures that only someone with the beam code (or the token) can decrypt the file. The rendezvous server never sees plaintext.
+
+## Token format
+
+Tokens are URL-safe base64-encoded JSON:
+
+```json
+{
+  "baseUrl": "http://127.0.0.1:41921",
+  "offerId": "5528de5312d39c74",
+  "code": "39-lumen-comet"
+}
+```
+
+Decode a token:
+```bash
+claw-beam decode-token <token>
+```
+
+## Legacy commands
+
+The simplified `send`/`receive` commands above handle the full flow automatically. For manual or multi-step flows, these legacy commands are still available:
+
+```bash
+# Start a rendezvous server manually
+claw-beam serve-rendezvous [store-dir] [port]
+
+# Send via HTTP rendezvous (requires separate accept step)
+claw-beam send-http <file> <base-url>
+claw-beam accept-http <base-url> <offer-id> <code> [receiver-label]
+claw-beam receive-http <base-url> <offer-id> <code> [--keep-bundle]
+
+# Send via local mailbox
+claw-beam send-rendezvous <file> <rendezvous-dir>
+claw-beam accept-offer <rendezvous-dir> <offer-id> <code> [receiver-label]
+claw-beam receive-offer <rendezvous-dir> <offer-id> <code> [--keep-bundle]
+
+# Raw bundle operations (no rendezvous)
+claw-beam send <file>              # create bundle + print code
+claw-beam accept <bundle> <code>   # accept a bundle
+claw-beam receive <bundle> <code>   # receive from accepted bundle
+```
+
+## Security
+
+**This is a prototype.** It demonstrates the UX and cryptographic spine, but:
+
+- No blind relay — the rendezvous server can observe metadata
+- No distributed consume-proof — a single server trusts consume-once semantics
+- No transport or session replay protection
+- SPAKE2 usage has not been audited for this application
+- No NAT traversal — receiver must reach the sender's rendezvous server
+- No chunked/streaming — entire file is loaded into memory
+
+Use for experiments and prototyping only. Do not transfer sensitive production data.
+
+## Development
+
+```bash
+# Run tests
+node --test
+
+# Run quick e2e
+bash scripts/quick-e2e.sh
+
+# Debug the simple flow
+node scripts/debug_simple.js
+```
+
+## License
+
+MIT

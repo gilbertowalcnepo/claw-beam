@@ -1,3 +1,9 @@
 node_modules/
 *.log
 .out/
+.tmp-claw-beam-http-*/
+scripts/debug_simple.js
+scripts/quick-e2e.sh
+src/simple.js
+src/token.js
+test/simple.test.js
