@@ -1,5 +1,17 @@
 # Changelog
 
+## v2026.4.19
+
+- **Simplified two-command UX**: `claw-beam send --filepath <file>` prints a single token; `claw-beam receive --token <token>` fetches and writes the file. No manual accept step needed.
+- **Token format**: base64url(JSON) encoding `{ baseUrl, offerId, code }` — copy-paste friendly, self-contained.
+- **sendSimple / receiveSimple APIs**: programmatic interface for the simplified flow (auto-publish + auto-accept on sender, single-step receive on receiver).
+- **Cross-platform**: Pure JavaScript, no native addons. Works on Linux, macOS, and Windows with Node 18+.
+- **Backward compatible**: Legacy positional commands (`send <file>`, `accept <bundle> <code>`, `receive <bundle> <code>`, `send-http`, `accept-http`, etc.) still work.
+- **Error handling**: Clean, stable error messages for malformed tokens, wrong codes, and corrupted bundles.
+- **Package metadata**: Added `engines`, `files`, `keywords`, and MIT license to `package.json` for proper npm packaging.
+- **Quick-start script**: `scripts/quick-e2e.sh` runs both legacy and simplified flows end-to-end.
+- **31 tests passing**: 21 existing + 10 new simple-flow tests.
+
 ## v2026.4.17-alpha
 
 - Added initial claw-beam shared-development prototype scaffold.

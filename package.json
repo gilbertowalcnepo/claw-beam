@@ -1,7 +1,7 @@
 {
   "name": "claw-beam",
-  "version": "2026.4.18",
-  "description": "Prototype secure one-time file transfer tool with SPAKE2, local mailbox rendezvous, and a tiny HTTP rendezvous server.",
+  "version": "2026.4.19",
+  "description": "Secure one-time file transfer — wormhole-like UX with SPAKE2 PAKE. Works on Linux, macOS, and Windows.",
   "type": "module",
   "bin": {
     "claw-beam": "./bin/claw-beam.js"
@@ -9,7 +9,26 @@
   "scripts": {
     "test": "node --test"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "README.md",
+    "version.txt"
+  ],
   "dependencies": {
     "spake2": "^1.0.2"
-  }
+  },
+  "keywords": [
+    "file-transfer",
+    "pake",
+    "spake2",
+    "encryption",
+    "wormhole",
+    "one-time"
+  ],
+  "license": "MIT"
 }
