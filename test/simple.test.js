@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { encodeToken, decodeToken } from "../src/token.js";
+import { fileURLToPath } from "node:url";
 import { sendSimple, receiveSimple } from "../src/simple.js";
 
-const repoRoot = "/home/declanops/.openclaw/workspace/clawboard-common/shared/development/claw-beam";
-const cliPath = path.join(repoRoot, "bin", "claw-beam.js");
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
+const cliPath = path.join(repoRoot, "..", "bin", "claw-beam.js");
 
 // ─── Token encoding ───
 

@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-const repoRoot = "/home/declanops/.openclaw/workspace/clawboard-common/shared/development/claw-beam";
-const cliPath = path.join(repoRoot, "bin", "claw-beam.js");
+import { fileURLToPath } from "node:url";
+
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
+const cliPath = path.join(repoRoot, "..", "bin", "claw-beam.js");
 
 function makeTempFile() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-cli-"));
