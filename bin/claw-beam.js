@@ -19,10 +19,11 @@ import {
 } from "../src/claw-beam.js";
 import { createRendezvousHttpServer } from "../src/rendezvous-http.js";
 import { sendSimple, receiveSimple, encodeToken, decodeToken } from "../src/simple.js";
+import { checkNgrokAvailable } from "../src/ngrok-tunnel.js";
 
 function usage() {
   console.error("Usage:");
-  console.error("  claw-beam send --filepath <file> [--port <port>] [--host <host>]");
+  console.error("  claw-beam send --filepath <file> [--port <port>] [--host <host>] [--ngrok] [--ngrok-region <region>]");
   console.error("  claw-beam receive --token <token> [--filespath <dir>]");
   console.error("");
   console.error("Legacy commands:");
@@ -84,14 +85,28 @@ async function run() {
 
       const port = args.port ? Number(args.port) : 0;
       const host = args.host || "127.0.0.1";
+      const useNgrok = args.ngrok === true;
+      const ngrokRegion = args["ngrok-region"] || process.env.NGROK_REGION || "us";
+      const ngrokAuthToken = args["ngrok-authtoken"] || null;
+
+      if (useNgrok) {
+        const ngrokCheck = await checkNgrokAvailable();
+        if (!ngrokCheck.available) {
+          console.error(`Error: --ngrok requested but ngrok is not available: ${ngrokCheck.error}`);
+          process.exit(1);
+        }
+      }
 
       const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "claw-beam-send-"));
-      const result = await sendSimple(resolved, { port, host, storeDir });
+      const result = await sendSimple(resolved, { port, host, storeDir, ngrok: useNgrok, ngrokRegion, ngrokAuthToken });
 
       console.log(`✉ beam sent`);
       console.log(`  file: ${path.basename(resolved)} (${fs.statSync(resolved).size} bytes)`);
       console.log(`  token: ${result.token}`);
       console.log(`  rendezvous: ${result.baseUrl}`);
+      if (result.ngrokTunnel) {
+        console.log(`  ngrok tunnel: ${result.ngrokTunnel.publicUrl} → localhost:${port || "auto"}`);
+      }
       console.log(`  offer: ${result.offerId}`);
       console.log(`  code: ${result.beamCode}`);
       console.log();
@@ -117,7 +132,7 @@ async function run() {
     }
 
     console.error("Error: --filepath is required");
-    console.error("Usage: claw-beam send --filepath <file> [--port <port>] [--host <host>]");
+    console.error("Usage: claw-beam send --filepath <file> [--port <port>] [--host <host>] [--ngrok] [--ngrok-region <region>]");
     process.exit(1);
   }
 

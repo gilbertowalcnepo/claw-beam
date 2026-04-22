@@ -1,6 +1,6 @@
 {
   "name": "claw-beam",
-  "version": "2026.4.19",
+  "version": "2026.4.22",
   "description": "Secure one-time file transfer — wormhole-like UX with SPAKE2 PAKE. Works on Linux, macOS, and Windows.",
   "type": "module",
   "bin": {

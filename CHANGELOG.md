@@ -1,5 +1,16 @@
 # Changelog
 
+## v2026.4.22
+
+- **ngrok tunnel integration**: `claw-beam send --filepath <file> --ngrok` starts an ephemeral ngrok tunnel so the sender does not need a public IP or port forwarding. The receiver gets the ngrok HTTPS URL inside the PAKE-encrypted token and connects outbound to it.
+- **Security model preserved**: ngrok only sees encrypted rendezvous traffic. The token carrying the ngrok URL is PAKE-encrypted, so discovering the URL alone does not compromise the transfer. Tunnels auto-destroy on completion or timeout.
+- **pyngrok preferred**: Uses pyngrok (Python) for programmatic tunnel control when available, falls back to the ngrok binary via API polling.
+- **`sendSimple` ngrok option**: Programmatic API gains `{ ngrok: true, ngrokRegion, ngrokAuthToken }` options.
+- **CLI flags**: `--ngrok`, `--ngrok-region <region>`, `--ngrok-authtoken <token>`.
+- **`localUrl` in result**: `sendSimple` now returns `localUrl` alongside `baseUrl`, so callers can distinguish the local server address from the public tunnel URL.
+- **`checkNgrokAvailable()`**: New exported function to probe whether ngrok (pyngrok or binary) is installed and functional.
+- **41 tests passing**: 31 previous + 10 new ngrok-tunnel tests (module structure, availability detection, error handling, token HTTPS URL round-trip, regression).
+
 ## v2026.4.19
 
 - **Simplified two-command UX**: `claw-beam send --filepath <file>` prints a single token; `claw-beam receive --token <token>` fetches and writes the file. No manual accept step needed.
