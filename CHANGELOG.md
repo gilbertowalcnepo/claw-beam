@@ -1,5 +1,12 @@
 # Changelog
 
+## v2026.4.22.1
+
+- **README overhaul**: comprehensive documentation update for public release — ngrok tunnel usage, programmatic API reference, token format docs (including HTTPS URLs), security notes, and updated development section.
+- **Git history cleanup**: all commit authors neutralized to `Claw Beam <claw-beam@users.noreply.github.com>`. No personal paths or identities remain in tracked source.
+- **Git config**: local repo author set to neutral identity for future commits.
+- **GitHub release v2026.4.22**: release notes updated to include README changes.
+
 ## v2026.4.22
 
 - **ngrok tunnel integration**: `claw-beam send --filepath <file> --ngrok` starts an ephemeral ngrok tunnel so the sender does not need a public IP or port forwarding. The receiver gets the ngrok HTTPS URL inside the PAKE-encrypted token and connects outbound to it.
